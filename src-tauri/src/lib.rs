@@ -297,6 +297,11 @@ fn dissociate_playlist_track_local_file(
 }
 
 #[tauri::command]
+fn embed_local_mp3_cover(file_path: String, artwork_url: String) -> Result<(), String> {
+    local_files::embed_cover_into_mp3(file_path.trim(), artwork_url.trim())
+}
+
+#[tauri::command]
 fn export_local_spectrogram_jpg(
     file_path: String,
     output_path: String,
@@ -429,6 +434,7 @@ pub fn run() {
             dissociate_playlist_local_folder,
             associate_playlist_track_local_file,
             dissociate_playlist_track_local_file,
+            embed_local_mp3_cover,
             export_local_spectrogram_jpg,
             generate_local_spectrogram_preview,
             delete_local_spectrogram_preview,

@@ -2,6 +2,8 @@ use std::path::Path;
 
 use audiotags::Tag;
 use base64::Engine;
+use id3::frame::{Picture, PictureType};
+use id3::{TagLike, Version};
 use image::{ImageBuffer, Rgb};
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
@@ -17,6 +19,67 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 use walkdir::WalkDir;
+
+pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), String> {
+    let source = Path::new(file_path);
+    if !source.exists() || !source.is_file() {
+        return Err(format!("Fichier audio introuvable: {file_path}"));
+    }
+
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let is_supported = extension == "mp3" || extension == "wav";
+
+    if !is_supported {
+        return Err("Cette action est disponible uniquement pour les fichiers MP3 et WAV".to_string());
+    }
+
+    let cover_url = artwork_url.trim();
+    if cover_url.is_empty() {
+        return Err("URL de cover manquante".to_string());
+    }
+
+    let response = reqwest::blocking::get(cover_url)
+        .map_err(|error| format!("Téléchargement cover impossible: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Téléchargement cover impossible (HTTP {})", response.status()));
+    }
+
+    let mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| value.starts_with("image/"))
+        .unwrap_or("image/jpeg")
+        .to_string();
+
+    let image_bytes = response
+        .bytes()
+        .map_err(|error| format!("Lecture cover impossible: {error}"))?
+        .to_vec();
+
+    if image_bytes.is_empty() {
+        return Err("Cover vide".to_string());
+    }
+
+    let mut tag = id3::Tag::read_from_path(source).unwrap_or_default();
+    tag.remove_all_pictures();
+    tag.add_frame(Picture {
+        mime_type,
+        picture_type: PictureType::CoverFront,
+        description: String::new(),
+        data: image_bytes,
+    });
+
+    tag.write_to_path(source, Version::Id3v24)
+        .map_err(|error| format!("Écriture tag MP3 impossible: {error}"))
+}
 
 #[derive(Debug, Clone)]
 pub struct ScannedAudioFile {

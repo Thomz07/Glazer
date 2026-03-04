@@ -159,6 +159,7 @@ function App() {
   const [scanningLocalFiles, setScanningLocalFiles] = useState(false);
   const [associatingLocalFile, setAssociatingLocalFile] = useState(false);
   const [dissociatingLocalFile, setDissociatingLocalFile] = useState(false);
+  const [embeddingLocalCover, setEmbeddingLocalCover] = useState(false);
   const [exportingSpectrogram, setExportingSpectrogram] = useState(false);
   const [loadingSpectrogramPreview, setLoadingSpectrogramPreview] = useState(false);
   const [savingManualCutoff, setSavingManualCutoff] = useState(false);
@@ -168,6 +169,27 @@ function App() {
   const [manualCutoffInputHz, setManualCutoffInputHz] = useState("");
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
+  const playlistDetailsCacheRef = useRef<Map<number, PlaylistDetails>>(new Map());
+  const [refreshingPlaylistDetails, setRefreshingPlaylistDetails] = useState(false);
+
+  function setSelectedPlaylistDetailsWithCache(details: PlaylistDetails | null) {
+    if (details) {
+      playlistDetailsCacheRef.current.set(details.id, details);
+    }
+    setSelectedPlaylistDetails(details);
+  }
+
+  function updateSelectedPlaylistDetailsWithCache(
+    updater: (current: PlaylistDetails | null) => PlaylistDetails | null,
+  ) {
+    setSelectedPlaylistDetails((current) => {
+      const next = updater(current);
+      if (next) {
+        playlistDetailsCacheRef.current.set(next.id, next);
+      }
+      return next;
+    });
+  }
 
   function t(key: TranslationKey) {
     return translations[language][key];
@@ -411,8 +433,23 @@ function App() {
     try {
       const items = await invoke<Playlist[]>("get_playlists");
       setPlaylists(items);
+
+      const currentIds = new Set(items.map((playlist) => playlist.id));
+      for (const playlistId of playlistDetailsCacheRef.current.keys()) {
+        if (!currentIds.has(playlistId)) {
+          playlistDetailsCacheRef.current.delete(playlistId);
+        }
+      }
+
+      if (selectedPlaylistDetails && !currentIds.has(selectedPlaylistDetails.id)) {
+        setSelectedPlaylistDetails(null);
+        setSelectedTrackInfo(null);
+      }
+
       if (items.length === 0) {
         setSelectedPlaylistDetails(null);
+        setSelectedTrackInfo(null);
+        playlistDetailsCacheRef.current.clear();
       }
     } catch (error) {
       setStatus(`${t("statusPlaylistsError")}: ${String(error)}`);
@@ -463,6 +500,8 @@ function App() {
 
       setPlaylists(items);
       setSelectedPlaylistDetails(null);
+      setSelectedTrackInfo(null);
+      playlistDetailsCacheRef.current.clear();
       await loadConfigStatus();
       setActiveView("playlists");
       setStatus(t("statusAuthSoundcloudOk"));
@@ -497,13 +536,21 @@ function App() {
 
   async function openPlaylistDetails(playlistId: number) {
     setStatus("");
+    const cached = playlistDetailsCacheRef.current.get(playlistId);
+
+    if (cached) {
+      setSelectedPlaylistDetailsWithCache(cached);
+      setSelectedTrackInfo(null);
+      await loadPlaylistLocalFolderAssociation(playlistId);
+      return;
+    }
 
     try {
       const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
         playlistId,
         headless: debugSettings.soundcloud_fallback_headless,
       });
-      setSelectedPlaylistDetails(details);
+      setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackInfo(null);
       await loadPlaylistLocalFolderAssociation(playlistId);
     } catch (error) {
@@ -583,7 +630,7 @@ function App() {
       setStatus(
         `${t("localScanDone")}: ${linkedTracks}/${details.track_count} ${t("localTracksLinked")} (${result.matched_files}/${result.scanned_files} ${t("localScanMatched")})`,
       );
-      setSelectedPlaylistDetails(details);
+      setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackInfo((current) => {
         if (!current) {
           return null;
@@ -611,7 +658,7 @@ function App() {
       setOverwriteExistingGlobalAnalysis(false);
       setStatus(t("localUnlinkDone"));
 
-      setSelectedPlaylistDetails((current) => {
+      updateSelectedPlaylistDetailsWithCache((current) => {
         if (!current) {
           return current;
         }
@@ -660,7 +707,7 @@ function App() {
         playlistId: selectedPlaylistDetails.id,
       });
 
-      setSelectedPlaylistDetails(details);
+      setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackInfo((current) => {
         if (!current) {
           return null;
@@ -688,7 +735,7 @@ function App() {
         trackPermalinkUrl: selectedTrackInfo.permalink_url,
       });
 
-      setSelectedPlaylistDetails((current) => {
+      updateSelectedPlaylistDetailsWithCache((current) => {
         if (!current) {
           return current;
         }
@@ -721,6 +768,83 @@ function App() {
       setStatus(`${t("localDissociateError")}: ${String(error)}`);
     } finally {
       setDissociatingLocalFile(false);
+    }
+  }
+
+  async function embedSelectedTrackCoverIntoLocalMp3() {
+    if (!selectedPlaylistDetails || !selectedTrackInfo?.local_file?.file_path) {
+      return;
+    }
+
+    const artworkUrl = resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url;
+    if (!artworkUrl) {
+      setStatus(t("localEmbedCoverMissingArtwork"));
+      return;
+    }
+
+    try {
+      setEmbeddingLocalCover(true);
+      await invoke("embed_local_mp3_cover", {
+        filePath: selectedTrackInfo.local_file.file_path,
+        artworkUrl,
+      });
+
+      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+        playlistId: selectedPlaylistDetails.id,
+      });
+
+      setSelectedPlaylistDetailsWithCache(details);
+      setSelectedTrackInfo((current) => {
+        if (!current) {
+          return null;
+        }
+        return details.tracks.find((track) => track.id === current.id) ?? null;
+      });
+
+      setStatus(t("localEmbedCoverDone"));
+    } catch (error) {
+      setStatus(`${t("localEmbedCoverError")}: ${String(error)}`);
+    } finally {
+      setEmbeddingLocalCover(false);
+    }
+  }
+
+  async function refreshSelectedPlaylistDetails() {
+    if (!selectedPlaylistDetails) {
+      return;
+    }
+
+    try {
+      setRefreshingPlaylistDetails(true);
+      const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
+        playlistId: selectedPlaylistDetails.id,
+        headless: debugSettings.soundcloud_fallback_headless,
+      });
+
+      setSelectedPlaylistDetailsWithCache(details);
+      setSelectedTrackInfo((current) => {
+        if (!current) {
+          return null;
+        }
+        return details.tracks.find((track) => track.id === current.id) ?? null;
+      });
+
+      await loadPlaylistLocalFolderAssociation(details.id);
+      setIsActionsMenuOpen(false);
+      setConfirmGlobalAudioAnalysis(false);
+      setOverwriteExistingGlobalAnalysis(false);
+      setStatus(t("statusPlaylistRefreshOk"));
+    } catch (error) {
+      const errorMessage = String(error);
+      if (/\b401\b/.test(errorMessage) || /unauthorized/i.test(errorMessage)) {
+        setGlobalPopupMessage(t("popupSessionExpired"));
+        setStatus(t("statusSessionExpired"));
+        return;
+      }
+
+      setStatus(`${t("statusPlaylistError")}: ${errorMessage}`);
+    } finally {
+      setRefreshingPlaylistDetails(false);
     }
   }
 
@@ -793,7 +917,7 @@ function App() {
       const details = await invoke<PlaylistDetails>("get_playlist_details", {
         playlistId: selectedPlaylistDetails.id,
       });
-      setSelectedPlaylistDetails(details);
+      setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackInfo((current) => {
         if (!current) {
           return null;
@@ -1212,7 +1336,7 @@ function App() {
                   <button type="button" onClick={() => setIsFilterMenuOpen((current) => !current)}>
                     {hasActiveTrackFilters ? `${t("filterButton")} (${activeFilterCount})` : t("filterButton")}
                   </button>
-                  {playlistFolderPath ? (
+                  {selectedPlaylistDetails ? (
                     <button
                       type="button"
                       onClick={() => {
@@ -1289,10 +1413,18 @@ function App() {
                     </div>
                   ) : null}
 
-                  {playlistFolderPath && isActionsMenuOpen ? (
+                  {isActionsMenuOpen ? (
                     <div className="actions-menu">
                       <h4>{t("actionsTitle")}</h4>
-                      {!confirmGlobalAudioAnalysis ? (
+                      <button
+                        type="button"
+                        className="filter-reset"
+                        onClick={refreshSelectedPlaylistDetails}
+                        disabled={refreshingPlaylistDetails || runningGlobalAudioAnalysis}
+                      >
+                        {refreshingPlaylistDetails ? t("playlistRefreshRunning") : t("playlistRefreshAction")}
+                      </button>
+                      {playlistFolderPath && !confirmGlobalAudioAnalysis ? (
                         <button
                           type="button"
                           className="filter-reset"
@@ -1301,7 +1433,8 @@ function App() {
                         >
                           {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisAction")}
                         </button>
-                      ) : (
+                      ) : null}
+                      {playlistFolderPath && confirmGlobalAudioAnalysis ? (
                         <>
                           <p className="actions-disclaimer">{t("globalAudioAnalysisDisclaimer")}</p>
                           <p className="actions-disclaimer">
@@ -1337,7 +1470,7 @@ function App() {
                             </button>
                           </div>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -1428,6 +1561,16 @@ function App() {
                             }}
                           >
                             {getAssociatedButtonLabel(selectedTrackInfo.associated_url)}
+                          </button>
+                        ) : null}
+
+                        {selectedTrackInfo.local_file ? (
+                          <button
+                            type="button"
+                            onClick={embedSelectedTrackCoverIntoLocalMp3}
+                            disabled={embeddingLocalCover}
+                          >
+                            {embeddingLocalCover ? t("localEmbedCoverRunning") : t("localEmbedCoverButton")}
                           </button>
                         ) : null}
 

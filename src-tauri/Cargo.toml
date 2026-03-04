@@ -38,4 +38,5 @@ mp3-duration = "0.1"
 symphonia = { version = "0.5", features = ["aac", "mp3", "isomp4", "flac", "ogg", "vorbis", "wav", "pcm"] }
 rustfft = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+id3 = "1"
 

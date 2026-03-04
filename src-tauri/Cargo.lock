@@ -4277,6 +4277,7 @@ dependencies = [
  "audiotags",
  "base64 0.22.1",
  "dotenvy",
+ "id3",
  "image",
  "lofty",
  "mp3-duration",
