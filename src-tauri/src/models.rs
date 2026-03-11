@@ -7,6 +7,7 @@ pub struct Playlist {
     pub track_count: i64,
     pub is_private: bool,
     pub artwork_url: Option<String>,
+    pub has_local_link: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

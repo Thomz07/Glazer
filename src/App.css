@@ -22,6 +22,9 @@
   --surface-border: #e0e0e0;
   --page-bg: #f6f6f6;
   --card-padding: 20px;
+  --scrollbar-track: #eceff4;
+  --scrollbar-thumb: #b2b8c2;
+  --scrollbar-thumb-hover: #969eab;
 }
 
 .app {
@@ -301,6 +304,12 @@ a {
   white-space: nowrap;
 }
 
+.playlist-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .playlist-cover,
 .track-cover {
   width: 52px;
@@ -390,6 +399,17 @@ a {
 .badge.public {
   background: #e6f3e6;
   color: #1e5f1e;
+}
+
+.badge.local {
+  background: #e8edf9;
+  color: #1f3b70;
+}
+
+.playlist-cover-mode-hint {
+  margin: -6px 0 12px;
+  font-size: 0.82rem;
+  color: #5f5f5f;
 }
 
 .auth-actions {
@@ -497,6 +517,48 @@ a {
   font-size: 0.82rem;
   color: #5f5f5f;
   word-break: break-all;
+}
+
+.local-folder-warning {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #d24a43;
+  background: #ffeceb;
+  color: #9b1f18;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.card,
+.track-panel {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.card::-webkit-scrollbar,
+.track-panel::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.card::-webkit-scrollbar-track,
+.track-panel::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+.card::-webkit-scrollbar-thumb,
+.track-panel::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+.card::-webkit-scrollbar-thumb:hover,
+.track-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 .track-item {
@@ -695,6 +757,9 @@ a {
   --surface-bg: #3a3a3a;
   --surface-border: #4a4a4a;
   --page-bg: #2f2f2f;
+  --scrollbar-track: #343a43;
+  --scrollbar-thumb: #5f6878;
+  --scrollbar-thumb-hover: #778196;
 }
 
 :root[data-theme="dark"] .card {
@@ -712,6 +777,11 @@ a {
 
 :root[data-theme="dark"] .playlist-item {
   border-color: #4f4f4f;
+}
+
+:root[data-theme="dark"] .badge.local {
+  background: #2f3f62;
+  color: #d4e3ff;
 }
 
 :root[data-theme="dark"] .playlist-action {
@@ -739,6 +809,7 @@ a {
 :root[data-theme="dark"] .playlist-item p,
 :root[data-theme="dark"] .section-head p,
 :root[data-theme="dark"] .playlist-title-meta-inline,
+:root[data-theme="dark"] .playlist-cover-mode-hint,
 :root[data-theme="dark"] .local-folder-path,
 :root[data-theme="dark"] .local-folder-association label,
 :root[data-theme="dark"] .track-main p,
@@ -746,6 +817,12 @@ a {
 :root[data-theme="dark"] .track-index,
 :root[data-theme="dark"] .status {
   color: #d1d1d1;
+}
+
+:root[data-theme="dark"] .local-folder-warning {
+  border-color: #d56a65;
+  background: #522625;
+  color: #ffd9d7;
 }
 
 :root[data-theme="dark"] .track-item {

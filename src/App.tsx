@@ -13,6 +13,7 @@ type Playlist = {
   track_count: number;
   is_private: boolean;
   artwork_url?: string | null;
+  has_local_link: boolean;
 };
 
 type PlaylistTrack = {
@@ -86,9 +87,21 @@ type DebugSettings = {
   logs_enabled: boolean;
 };
 
+type PlaylistCoverMode = "first" | "random";
+
+type MiscSettings = {
+  playlist_cover_mode: PlaylistCoverMode;
+};
+
 type PlaylistLocalFolderAssociation = {
   playlist_id: number;
   folder_path?: string | null;
+  folder_available: boolean;
+};
+
+type PlaylistDetailsCacheEntry = {
+  details: PlaylistDetails;
+  cached_at_ms: number;
 };
 
 type PlaylistLocalScanResult = {
@@ -125,6 +138,8 @@ type PlaylistGlobalAudioAnalysisResult = {
   failed_tracks: number;
 };
 
+const MAX_PLAYLIST_DETAILS_CACHE_SIZE = 4;
+
 function App() {
   const cardScrollRef = useRef<HTMLElement | null>(null);
   const sectionControlsRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +158,8 @@ function App() {
     soundcloud_fallback_headless: true,
     logs_enabled: true,
   });
+  const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
+  const [savingPlaylistCoverMode, setSavingPlaylistCoverMode] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
   const [panelCoverQuality, setPanelCoverQuality] = useState<CoverQuality>("t500x500");
   const [language, setLanguage] = useState<Language>("fr");
@@ -155,6 +172,7 @@ function App() {
   const [trackViewMode, setTrackViewMode] = useState<TrackViewMode>("list");
   const [spectrogramAnalysisScope, setSpectrogramAnalysisScope] = useState<SpectrogramAnalysisScope>("half");
   const [playlistFolderPath, setPlaylistFolderPath] = useState("");
+  const [playlistFolderAvailable, setPlaylistFolderAvailable] = useState(true);
   const [loadingPlaylistFolder, setLoadingPlaylistFolder] = useState(false);
   const [scanningLocalFiles, setScanningLocalFiles] = useState(false);
   const [associatingLocalFile, setAssociatingLocalFile] = useState(false);
@@ -169,12 +187,29 @@ function App() {
   const [manualCutoffInputHz, setManualCutoffInputHz] = useState("");
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
-  const playlistDetailsCacheRef = useRef<Map<number, PlaylistDetails>>(new Map());
+  const playlistDetailsCacheRef = useRef<Map<number, PlaylistDetailsCacheEntry>>(new Map());
   const [refreshingPlaylistDetails, setRefreshingPlaylistDetails] = useState(false);
+
+  function upsertPlaylistDetailsCache(details: PlaylistDetails) {
+    // Reinsert key to keep recency order, then evict oldest entries if needed.
+    playlistDetailsCacheRef.current.delete(details.id);
+    playlistDetailsCacheRef.current.set(details.id, {
+      details,
+      cached_at_ms: Date.now(),
+    });
+
+    while (playlistDetailsCacheRef.current.size > MAX_PLAYLIST_DETAILS_CACHE_SIZE) {
+      const oldest = playlistDetailsCacheRef.current.keys().next().value as number | undefined;
+      if (oldest === undefined) {
+        break;
+      }
+      playlistDetailsCacheRef.current.delete(oldest);
+    }
+  }
 
   function setSelectedPlaylistDetailsWithCache(details: PlaylistDetails | null) {
     if (details) {
-      playlistDetailsCacheRef.current.set(details.id, details);
+      upsertPlaylistDetailsCache(details);
     }
     setSelectedPlaylistDetails(details);
   }
@@ -185,10 +220,32 @@ function App() {
     setSelectedPlaylistDetails((current) => {
       const next = updater(current);
       if (next) {
-        playlistDetailsCacheRef.current.set(next.id, next);
+        upsertPlaylistDetailsCache(next);
       }
       return next;
     });
+  }
+
+  function applyPlaylistsSnapshot(items: Playlist[], clearSelectionWhenEmpty: boolean) {
+    setPlaylists(items);
+
+    const currentIds = new Set(items.map((playlist) => playlist.id));
+    for (const playlistId of playlistDetailsCacheRef.current.keys()) {
+      if (!currentIds.has(playlistId)) {
+        playlistDetailsCacheRef.current.delete(playlistId);
+      }
+    }
+
+    if (selectedPlaylistDetails && !currentIds.has(selectedPlaylistDetails.id)) {
+      setSelectedPlaylistDetails(null);
+      setSelectedTrackInfo(null);
+    }
+
+    if (clearSelectionWhenEmpty && items.length === 0) {
+      setSelectedPlaylistDetails(null);
+      setSelectedTrackInfo(null);
+      playlistDetailsCacheRef.current.clear();
+    }
   }
 
   function t(key: TranslationKey) {
@@ -366,7 +423,12 @@ function App() {
       setSpectrogramPreview(result);
 
       if (result.estimated_cutoff_hz && result.estimated_cutoff_hz > 0) {
-        await persistCutoffAnalysis(result.estimated_cutoff_hz);
+        try {
+          await persistCutoffAnalysis(result.estimated_cutoff_hz);
+        } catch (persistError) {
+          // Keep preview visible even if analysis persistence fails.
+          setStatus(`${t("localSpectrogramExportError")}: ${String(persistError)}`);
+        }
         setManualCutoffInputHz(String(result.estimated_cutoff_hz));
       }
 
@@ -375,14 +437,24 @@ function App() {
       }
     } catch (error) {
       setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
-      setSpectrogramPreview(null);
     } finally {
       setLoadingSpectrogramPreview(false);
     }
   }
 
   async function loadInitialData() {
-    await Promise.all([loadConfigStatus(), loadSpotifyStatus(), loadDebugSettings(), loadPlaylists()]);
+    const [soundcloud] = await Promise.all([
+      loadConfigStatus(),
+      loadSpotifyStatus(),
+      loadDebugSettings(),
+      loadMiscSettings(),
+    ]);
+
+    if (soundcloud?.connected) {
+      await syncPlaylists(true);
+    } else {
+      await loadPlaylists();
+    }
   }
 
   function applyTheme(mode: ThemeMode) {
@@ -410,12 +482,14 @@ function App() {
     localStorage.setItem("glazer_spectrogram_analysis_scope", scope);
   }
 
-  async function loadConfigStatus() {
+  async function loadConfigStatus(): Promise<SoundCloudConfigStatus | null> {
     try {
       const currentStatus = await invoke<SoundCloudConfigStatus>("get_connection_status");
       setConfigStatus(currentStatus);
+      return currentStatus;
     } catch (error) {
       setStatus(`${t("statusConfigError")}: ${String(error)}`);
+      return null;
     }
   }
 
@@ -432,27 +506,27 @@ function App() {
     setLoadingPlaylists(true);
     try {
       const items = await invoke<Playlist[]>("get_playlists");
-      setPlaylists(items);
-
-      const currentIds = new Set(items.map((playlist) => playlist.id));
-      for (const playlistId of playlistDetailsCacheRef.current.keys()) {
-        if (!currentIds.has(playlistId)) {
-          playlistDetailsCacheRef.current.delete(playlistId);
-        }
-      }
-
-      if (selectedPlaylistDetails && !currentIds.has(selectedPlaylistDetails.id)) {
-        setSelectedPlaylistDetails(null);
-        setSelectedTrackInfo(null);
-      }
-
-      if (items.length === 0) {
-        setSelectedPlaylistDetails(null);
-        setSelectedTrackInfo(null);
-        playlistDetailsCacheRef.current.clear();
-      }
+      applyPlaylistsSnapshot(items, true);
     } catch (error) {
       setStatus(`${t("statusPlaylistsError")}: ${String(error)}`);
+    } finally {
+      setLoadingPlaylists(false);
+    }
+  }
+
+  async function syncPlaylists(silent = false) {
+    setLoadingPlaylists(true);
+    try {
+      const items = await invoke<Playlist[]>("sync_soundcloud_playlists");
+      applyPlaylistsSnapshot(items, false);
+
+      if (!silent) {
+        setStatus(t("statusSyncOk"));
+      }
+    } catch (error) {
+      if (!silent) {
+        setStatus(`${t("statusSyncError")}: ${String(error)}`);
+      }
     } finally {
       setLoadingPlaylists(false);
     }
@@ -464,6 +538,15 @@ function App() {
       setDebugSettings(settings);
     } catch (error) {
       setStatus(`${t("statusDebugError")}: ${String(error)}`);
+    }
+  }
+
+  async function loadMiscSettings() {
+    try {
+      const settings = await invoke<MiscSettings>("get_misc_settings");
+      setPlaylistCoverMode(settings.playlist_cover_mode ?? "first");
+    } catch (error) {
+      setStatus(`${t("statusMiscSettingsError")}: ${String(error)}`);
     }
   }
 
@@ -485,6 +568,25 @@ function App() {
     }
   }
 
+  async function savePlaylistCoverMode(mode: PlaylistCoverMode) {
+    try {
+      setSavingPlaylistCoverMode(true);
+      await invoke("set_playlist_cover_mode", { mode });
+      setPlaylistCoverMode(mode);
+
+      // Re-sync so playlist artworks reflect the selected cover strategy immediately.
+      if (configStatus?.connected) {
+        const items = await invoke<Playlist[]>("sync_soundcloud_playlists");
+        applyPlaylistsSnapshot(items, false);
+      }
+      setStatus(t("statusPlaylistCoverModeSaved"));
+    } catch (error) {
+      setStatus(`${t("statusPlaylistCoverModeError")}: ${String(error)}`);
+    } finally {
+      setSavingPlaylistCoverMode(false);
+    }
+  }
+
   async function connectSoundCloud() {
     setStatus("");
     setConnecting(true);
@@ -498,10 +600,7 @@ function App() {
         expectedState: start.state,
       });
 
-      setPlaylists(items);
-      setSelectedPlaylistDetails(null);
-      setSelectedTrackInfo(null);
-      playlistDetailsCacheRef.current.clear();
+      applyPlaylistsSnapshot(items, true);
       await loadConfigStatus();
       setActiveView("playlists");
       setStatus(t("statusAuthSoundcloudOk"));
@@ -539,7 +638,7 @@ function App() {
     const cached = playlistDetailsCacheRef.current.get(playlistId);
 
     if (cached) {
-      setSelectedPlaylistDetailsWithCache(cached);
+      setSelectedPlaylistDetailsWithCache(cached.details);
       setSelectedTrackInfo(null);
       await loadPlaylistLocalFolderAssociation(playlistId);
       return;
@@ -571,6 +670,7 @@ function App() {
     setSelectedPlaylistDetails(null);
     setSelectedTrackInfo(null);
     setPlaylistFolderPath("");
+    setPlaylistFolderAvailable(true);
     setIsFilterMenuOpen(false);
     setTrackSortOrder("original");
     setDownloadSourceFilter("all");
@@ -585,9 +685,15 @@ function App() {
         playlistId,
       });
       setPlaylistFolderPath(association.folder_path ?? "");
+      setPlaylistFolderAvailable(association.folder_available);
+
+      if (association.folder_path && !association.folder_available) {
+        setStatus(t("localFolderUnavailableStatus"));
+      }
     } catch (error) {
       setStatus(`${t("statusPlaylistError")}: ${String(error)}`);
       setPlaylistFolderPath("");
+      setPlaylistFolderAvailable(true);
     } finally {
       setLoadingPlaylistFolder(false);
     }
@@ -610,6 +716,7 @@ function App() {
       }
 
       setPlaylistFolderPath(selected);
+      setPlaylistFolderAvailable(true);
       setScanningLocalFiles(true);
       setStatus(t("localScanRunning"));
 
@@ -619,6 +726,7 @@ function App() {
       });
 
       setPlaylistFolderPath(result.folder_path);
+      setPlaylistFolderAvailable(true);
       setStatus(
         `${t("localScanDone")}: ${result.matched_files}/${result.scanned_files} ${t("localScanMatched")}`,
       );
@@ -652,6 +760,7 @@ function App() {
     try {
       await invoke("dissociate_playlist_local_folder", { playlistId: selectedPlaylistDetails.id });
       setPlaylistFolderPath("");
+      setPlaylistFolderAvailable(true);
       setAudioQualityFilter("all");
       setIsActionsMenuOpen(false);
       setConfirmGlobalAudioAnalysis(false);
@@ -1229,7 +1338,7 @@ function App() {
               <div className="section-head">
                 <h2>{t("myPlaylists")}</h2>
                 <div className="actions">
-                  <button type="button" onClick={loadPlaylists}>
+                  <button type="button" onClick={() => { void syncPlaylists(); }}>
                     {t("refresh")}
                   </button>
                 </div>
@@ -1269,9 +1378,16 @@ function App() {
                         <p className="playlist-meta">{playlist.track_count} {t("tracksUnit")}</p>
                       </div>
                     </div>
-                    <span className={playlist.is_private ? "badge private" : "badge public"}>
-                      {playlist.is_private ? t("private") : t("public")}
-                    </span>
+                    <div className="playlist-badges">
+                      <span className={playlist.is_private ? "badge private" : "badge public"}>
+                        {playlist.is_private ? t("private") : t("public")}
+                      </span>
+                      {playlist.has_local_link ? (
+                        <span className="badge local" title={t("playlistLocalLinked")}>
+                          {t("localBadgeShort")}
+                        </span>
+                      ) : null}
+                    </div>
                     <span className="playlist-action" aria-label={t("openPlaylist")}>
                       <span className="playlist-arrow">›</span>
                     </span>
@@ -1284,22 +1400,19 @@ function App() {
               <section className="tracks-column">
               <div className="local-folder-association">
                 <div className="local-folder-meta">
-                  <label htmlFor="playlist-folder-path">
+                  <label>
                     {playlistFolderPath ? t("localFolderLabel") : t("localNoFolderLabel")}
                   </label>
                   {playlistFolderPath ? <p className="local-folder-path">{playlistFolderPath}</p> : null}
+                  {playlistFolderPath && !playlistFolderAvailable ? (
+                    <p className="local-folder-warning">{t("localFolderUnavailable")}</p>
+                  ) : null}
                 </div>
                 <button
-                  id="playlist-folder-path"
                   type="button"
-                  onClick={playlistFolderPath ? dissociateFolder : selectFolderAndScan}
-                  disabled={loadingPlaylistFolder || scanningLocalFiles}
+                  onClick={closePlaylistDetails}
                 >
-                  {scanningLocalFiles
-                    ? t("localScanRunning")
-                    : playlistFolderPath
-                      ? t("localUnlinkButton")
-                      : t("localScanButton")}
+                  {t("back")}
                 </button>
               </div>
 
@@ -1474,8 +1587,16 @@ function App() {
                     </div>
                   ) : null}
 
-                  <button type="button" onClick={closePlaylistDetails}>
-                    {t("back")}
+                  <button
+                    type="button"
+                    onClick={playlistFolderPath ? dissociateFolder : selectFolderAndScan}
+                    disabled={loadingPlaylistFolder || scanningLocalFiles}
+                  >
+                    {scanningLocalFiles
+                      ? t("localScanRunning")
+                      : playlistFolderPath
+                        ? t("localUnlinkButton")
+                        : t("localScanButton")}
                   </button>
                 </div>
               </div>
@@ -1596,44 +1717,46 @@ function App() {
                       </div>
                     </section>
 
-                    <section className="track-panel-actions-card">
-                      <h3>{t("localSpectrogramPreviewTitle")}</h3>
-                      <div className="panel-actions">
-                        <button
-                          type="button"
-                          onClick={generateSpectrogramPreview}
-                          disabled={!selectedTrackInfo.local_file || loadingSpectrogramPreview}
-                        >
-                          {loadingSpectrogramPreview ? t("localSpectrogramPreviewLoading") : t("localSpectrogramPreviewLoadButton")}
-                        </button>
-                        <input
-                          type="number"
-                          min={1}
-                          step={100}
-                          value={manualCutoffInputHz}
-                          onChange={(event) => setManualCutoffInputHz(event.currentTarget.value)}
-                          placeholder={t("localSpectrogramManualPlaceholder")}
-                          aria-label={t("localSpectrogramManualLabel")}
-                        />
-                        <button
-                          type="button"
-                          onClick={saveManualCutoff}
-                          disabled={!selectedTrackInfo.local_file || savingManualCutoff}
-                        >
-                          {savingManualCutoff ? t("localSpectrogramManualSaving") : t("localSpectrogramManualApply")}
-                        </button>
-                      </div>
-                      {!loadingSpectrogramPreview && spectrogramPreview ? (
-                        <>
-                          <img src={spectrogramPreview.image_data_url} alt="Spectrogram preview" className="spectrogram-preview-image" />
-                          <p className="spectrogram-preview-meta">
-                            <strong>{t("localSpectrogramCutoffLabel")}:</strong>{" "}
-                            {formatFrequency(spectrogramPreview.estimated_cutoff_hz ?? undefined)}
-                          </p>
-                          <p className="spectrogram-preview-meta">{t("localSpectrogramCutoffDisclaimer")}</p>
-                        </>
-                      ) : null}
-                    </section>
+                    {playlistFolderPath ? (
+                      <section className="track-panel-actions-card">
+                        <h3>{t("localSpectrogramPreviewTitle")}</h3>
+                        <div className="panel-actions">
+                          <button
+                            type="button"
+                            onClick={generateSpectrogramPreview}
+                            disabled={!selectedTrackInfo.local_file || loadingSpectrogramPreview}
+                          >
+                            {loadingSpectrogramPreview ? t("localSpectrogramPreviewLoading") : t("localSpectrogramPreviewLoadButton")}
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            step={100}
+                            value={manualCutoffInputHz}
+                            onChange={(event) => setManualCutoffInputHz(event.currentTarget.value)}
+                            placeholder={t("localSpectrogramManualPlaceholder")}
+                            aria-label={t("localSpectrogramManualLabel")}
+                          />
+                          <button
+                            type="button"
+                            onClick={saveManualCutoff}
+                            disabled={!selectedTrackInfo.local_file || savingManualCutoff}
+                          >
+                            {savingManualCutoff ? t("localSpectrogramManualSaving") : t("localSpectrogramManualApply")}
+                          </button>
+                        </div>
+                        {!loadingSpectrogramPreview && spectrogramPreview ? (
+                          <>
+                            <img src={spectrogramPreview.image_data_url} alt="Spectrogram preview" className="spectrogram-preview-image" />
+                            <p className="spectrogram-preview-meta">
+                              <strong>{t("localSpectrogramCutoffLabel")}:</strong>{" "}
+                              {formatFrequency(spectrogramPreview.estimated_cutoff_hz ?? undefined)}
+                            </p>
+                            <p className="spectrogram-preview-meta">{t("localSpectrogramCutoffDisclaimer")}</p>
+                          </>
+                        ) : null}
+                      </section>
+                    ) : null}
 
                     <div className="track-panel-grid">
                       <section className="track-panel-section">
@@ -1750,6 +1873,20 @@ function App() {
             </select>
           </label>
 
+          <label className="setting-toggle auth-actions">
+            <span>{t("playlistCoverModeLabel")}</span>
+            <select
+              value={playlistCoverMode}
+              onChange={(event) => savePlaylistCoverMode(event.currentTarget.value as PlaylistCoverMode)}
+              disabled={savingPlaylistCoverMode}
+            >
+              <option value="first">{t("playlistCoverModeFirst")}</option>
+              <option value="random">{t("playlistCoverModeRandom")}</option>
+            </select>
+          </label>
+          <p className="playlist-cover-mode-hint">{t("playlistCoverModeHint")}</p>
+
+          <h3>{t("analysisSettingsTitle")}</h3>
           <label className="setting-toggle auth-actions">
             <span>{t("spectrogramScopeLabel")}</span>
             <select

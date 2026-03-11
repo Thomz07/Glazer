@@ -335,8 +335,25 @@ pub fn list_playlists(db_path: &Path) -> Result<Vec<Playlist>, String> {
     let mut statement = connection
         .prepare(
             "
-            SELECT id, title, track_count, is_private, artwork_url
-            FROM playlists
+            SELECT
+                p.id,
+                p.title,
+                p.track_count,
+                p.is_private,
+                p.artwork_url,
+                (
+                    EXISTS(
+                        SELECT 1
+                        FROM playlist_folder_links pfl
+                        WHERE pfl.playlist_id = p.id
+                    )
+                    OR EXISTS(
+                        SELECT 1
+                        FROM playlist_track_file_links ptfl
+                        WHERE ptfl.playlist_id = p.id
+                    )
+                ) AS has_local_link
+            FROM playlists p
             ORDER BY title COLLATE NOCASE ASC
             ",
         )
@@ -350,6 +367,7 @@ pub fn list_playlists(db_path: &Path) -> Result<Vec<Playlist>, String> {
                 track_count: row.get(2)?,
                 is_private: row.get::<_, i64>(3)? == 1,
                 artwork_url: row.get(4)?,
+                has_local_link: row.get::<_, i64>(5)? == 1,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -417,6 +435,43 @@ pub fn set_logs_enabled(db_path: &Path, enabled: bool) -> Result<(), String> {
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_playlist_cover_mode(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'playlist_cover_mode'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(match value.as_deref() {
+        Some("random") => "random".to_string(),
+        _ => "first".to_string(),
+    })
+}
+
+pub fn set_playlist_cover_mode(db_path: &Path, mode: &str) -> Result<(), String> {
+    let normalized_mode = match mode {
+        "random" => "random",
+        _ => "first",
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('playlist_cover_mode', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized_mode],
         )
         .map_err(|error| error.to_string())?;
 

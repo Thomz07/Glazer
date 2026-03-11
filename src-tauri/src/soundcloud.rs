@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use rand::distributions::{Alphanumeric, DistString};
+use rand::seq::SliceRandom;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -36,12 +37,24 @@ struct SoundCloudPlaylist {
     sharing: Option<String>,
     #[serde(default)]
     artwork_url: Option<String>,
+    #[serde(default)]
+    tracks: Vec<SoundCloudPlaylistTrackArtwork>,
+}
+
+#[derive(Deserialize)]
+struct SoundCloudPlaylistTrackArtwork {
+    #[serde(default)]
+    artwork_url: Option<String>,
+    #[serde(default)]
+    user: Option<SoundCloudUser>,
 }
 
 #[derive(Deserialize)]
 struct SoundCloudUser {
     #[serde(default)]
     username: Option<String>,
+    #[serde(default)]
+    avatar_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -302,7 +315,10 @@ fn exchange_code_for_token(secrets: &SoundCloudSecrets, code: &str) -> Result<Au
     })
 }
 
-pub fn fetch_user_playlists(access_token: &str) -> Result<Vec<Playlist>, String> {
+pub fn fetch_user_playlists(
+    access_token: &str,
+    use_random_track_cover: bool,
+) -> Result<Vec<Playlist>, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -313,7 +329,7 @@ pub fn fetch_user_playlists(access_token: &str) -> Result<Vec<Playlist>, String>
         .query(&[
             ("limit", "200"),
             ("linked_partitioning", "true"),
-            ("show_tracks", "false"),
+            ("show_tracks", "true"),
         ])
         .header("accept", "application/json; charset=utf-8")
         .header("Authorization", format!("OAuth {access_token}"))
@@ -332,14 +348,40 @@ pub fn fetch_user_playlists(access_token: &str) -> Result<Vec<Playlist>, String>
 
     let payload = parse_playlists_response(&body)?;
 
+    let mut rng = rand::thread_rng();
+
     Ok(payload
         .into_iter()
-        .map(|item| Playlist {
+        .map(|item| {
+            let fallback_artwork = if use_random_track_cover {
+                let candidates: Vec<String> = item
+                    .tracks
+                    .iter()
+                    .filter_map(|track| {
+                        track
+                            .artwork_url
+                            .clone()
+                            .or_else(|| track.user.as_ref().and_then(|user| user.avatar_url.clone()))
+                    })
+                    .collect();
+                candidates.choose(&mut rng).cloned()
+            } else {
+                item.tracks.first().and_then(|track| {
+                    track
+                        .artwork_url
+                        .clone()
+                        .or_else(|| track.user.as_ref().and_then(|user| user.avatar_url.clone()))
+                })
+            };
+
+            Playlist {
             id: item.id,
             title: item.title,
             track_count: item.track_count,
             is_private: item.sharing.as_deref() == Some("private"),
-            artwork_url: item.artwork_url,
+            artwork_url: item.artwork_url.or(fallback_artwork),
+            has_local_link: false,
+            }
         })
         .collect())
 }

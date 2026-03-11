@@ -5,7 +5,7 @@ mod models;
 mod soundcloud;
 mod spotify;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use models::{Playlist, PlaylistDetails};
 use serde::Serialize;
@@ -35,6 +35,11 @@ struct DebugSettings {
     logs_enabled: bool,
 }
 
+#[derive(Serialize)]
+struct MiscSettings {
+    playlist_cover_mode: String,
+}
+
 #[derive(Serialize, Clone)]
 struct FallbackProgress {
     playlist_id: i64,
@@ -45,6 +50,7 @@ struct FallbackProgress {
 struct PlaylistLocalFolderAssociation {
     playlist_id: i64,
     folder_path: Option<String>,
+    folder_available: bool,
 }
 
 #[derive(Serialize)]
@@ -182,7 +188,8 @@ fn get_playlists(state: State<AppState>) -> Result<Vec<Playlist>, String> {
 fn sync_soundcloud_playlists(state: State<AppState>) -> Result<Vec<Playlist>, String> {
     let access_token = db::get_access_token(&state.db_path)?
         .ok_or_else(|| "Aucun token SoundCloud trouvé. Connecte-toi d'abord.".to_string())?;
-    let playlists = soundcloud::fetch_user_playlists(&access_token)?;
+    let use_random_track_cover = db::get_playlist_cover_mode(&state.db_path)? == "random";
+    let playlists = soundcloud::fetch_user_playlists(&access_token, use_random_track_cover)?;
     db::replace_playlists(&state.db_path, &playlists)?;
     db::list_playlists(&state.db_path)
 }
@@ -230,9 +237,15 @@ fn get_playlist_local_folder_association(
     playlist_id: i64,
 ) -> Result<PlaylistLocalFolderAssociation, String> {
     let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?;
+    let folder_available = folder_path
+        .as_deref()
+        .map(|path| Path::new(path).exists())
+        .unwrap_or(true);
+
     Ok(PlaylistLocalFolderAssociation {
         playlist_id,
         folder_path,
+        folder_available,
     })
 }
 
@@ -400,6 +413,18 @@ fn set_logs_enabled(state: State<AppState>, enabled: bool) -> Result<(), String>
     db::set_logs_enabled(&state.db_path, enabled)
 }
 
+#[tauri::command]
+fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
+    Ok(MiscSettings {
+        playlist_cover_mode: db::get_playlist_cover_mode(&state.db_path)?,
+    })
+}
+
+#[tauri::command]
+fn set_playlist_cover_mode(state: State<AppState>, mode: String) -> Result<(), String> {
+    db::set_playlist_cover_mode(&state.db_path, mode.trim())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     config::load_dotenv();
@@ -442,7 +467,9 @@ pub fn run() {
             analyze_playlist_local_audio_quality,
             get_debug_settings,
             set_soundcloud_fallback_headless,
-            set_logs_enabled
+            set_logs_enabled,
+            get_misc_settings,
+            set_playlist_cover_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

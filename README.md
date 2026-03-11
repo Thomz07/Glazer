@@ -16,6 +16,8 @@ Application desktop pour gérer des playlists SoundCloud, associer des fichiers 
 - Auth Spotify (connexion disponible dans Réglages).
 - Association d'un dossier local à une playlist SoundCloud.
 - Association/dissociation manuelle d'un fichier local par track.
+- Indicateur des playlists assignées a un dossier local.
+- Cover playlist automatique: cover SoundCloud, sinon cover de track (premiere ou aleatoire configurable).
 - Métadonnées locales: format, bitrate, sample rate, canaux, taille, etc.
 - Analyse spectrogramme locale (native Rust) avec:
 	- aperçu à la demande,
