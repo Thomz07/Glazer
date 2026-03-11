@@ -341,13 +341,17 @@ pub fn list_playlists(db_path: &Path) -> Result<Vec<Playlist>, String> {
                 p.track_count,
                 p.is_private,
                 p.artwork_url,
+                EXISTS(
+                    SELECT 1
+                    FROM playlist_folder_links pfl
+                    WHERE pfl.playlist_id = p.id
+                ) AS has_local_folder,
                 (
                     EXISTS(
                         SELECT 1
                         FROM playlist_folder_links pfl
                         WHERE pfl.playlist_id = p.id
-                    )
-                    OR EXISTS(
+                    ) OR EXISTS(
                         SELECT 1
                         FROM playlist_track_file_links ptfl
                         WHERE ptfl.playlist_id = p.id
@@ -367,7 +371,8 @@ pub fn list_playlists(db_path: &Path) -> Result<Vec<Playlist>, String> {
                 track_count: row.get(2)?,
                 is_private: row.get::<_, i64>(3)? == 1,
                 artwork_url: row.get(4)?,
-                has_local_link: row.get::<_, i64>(5)? == 1,
+                has_local_folder: row.get::<_, i64>(5)? == 1,
+                has_local_link: row.get::<_, i64>(6)? == 1,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -753,6 +758,282 @@ pub fn dissociate_playlist_track_local_file(
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+pub fn get_playlist_track_local_file_link_info(
+    db_path: &Path,
+    playlist_id: i64,
+    track_permalink_url: &str,
+) -> Result<Option<(String, String)>, String> {
+    let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud de la track invalide.".to_string())?;
+
+    let connection = open_connection(db_path)?;
+    let result = connection
+        .query_row(
+            "
+            SELECT file_path, file_name
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1 AND soundcloud_url = ?2
+            LIMIT 1
+            ",
+            params![playlist_id, normalized_url],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok();
+
+    Ok(result)
+}
+
+pub fn get_playlist_track_local_file_link_info_by_file_path(
+    db_path: &Path,
+    playlist_id: i64,
+    file_path: &str,
+) -> Result<Option<(String, String)>, String> {
+    let normalized_file_path = file_path.trim();
+    if normalized_file_path.is_empty() {
+        return Ok(None);
+    }
+
+    let connection = open_connection(db_path)?;
+    let result = connection
+        .query_row(
+            "
+            SELECT file_path, file_name
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1 AND file_path = ?2
+            LIMIT 1
+            ",
+            params![playlist_id, normalized_file_path],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok();
+
+    Ok(result)
+}
+
+pub fn move_playlist_track_local_file_link(
+    db_path: &Path,
+    source_playlist_id: i64,
+    target_playlist_id: i64,
+    track_permalink_url: &str,
+    new_file_path: Option<&str>,
+    new_file_name: Option<&str>,
+) -> Result<bool, String> {
+    if source_playlist_id == target_playlist_id {
+        return Ok(false);
+    }
+
+    let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud de la track invalide.".to_string())?;
+
+    let connection = open_connection(db_path)?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+
+    let moved = transaction
+        .execute(
+            "
+            INSERT INTO playlist_track_file_links (
+                playlist_id,
+                soundcloud_url,
+                file_path,
+                file_name,
+                file_size_bytes,
+                modified_at,
+                local_cover_data_url,
+                local_title,
+                local_artist,
+                local_duration_seconds,
+                local_format,
+                local_bitrate_kbps,
+                local_bitrate_announced_kbps,
+                local_bitrate_real_kbps,
+                local_max_frequency_hz,
+                local_quality_label,
+                local_sample_rate_hz,
+                local_channels,
+                scanned_at
+            )
+            SELECT
+                ?3,
+                soundcloud_url,
+                COALESCE(?4, file_path),
+                COALESCE(?5, file_name),
+                file_size_bytes,
+                modified_at,
+                local_cover_data_url,
+                local_title,
+                local_artist,
+                local_duration_seconds,
+                local_format,
+                local_bitrate_kbps,
+                local_bitrate_announced_kbps,
+                local_bitrate_real_kbps,
+                local_max_frequency_hz,
+                local_quality_label,
+                local_sample_rate_hz,
+                local_channels,
+                scanned_at
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1 AND soundcloud_url = ?2
+            ON CONFLICT(playlist_id, soundcloud_url) DO UPDATE SET
+                file_path = excluded.file_path,
+                file_name = excluded.file_name,
+                file_size_bytes = excluded.file_size_bytes,
+                modified_at = excluded.modified_at,
+                local_cover_data_url = excluded.local_cover_data_url,
+                local_title = excluded.local_title,
+                local_artist = excluded.local_artist,
+                local_duration_seconds = excluded.local_duration_seconds,
+                local_format = excluded.local_format,
+                local_bitrate_kbps = excluded.local_bitrate_kbps,
+                local_bitrate_announced_kbps = excluded.local_bitrate_announced_kbps,
+                local_bitrate_real_kbps = excluded.local_bitrate_real_kbps,
+                local_max_frequency_hz = excluded.local_max_frequency_hz,
+                local_quality_label = excluded.local_quality_label,
+                local_sample_rate_hz = excluded.local_sample_rate_hz,
+                local_channels = excluded.local_channels,
+                scanned_at = excluded.scanned_at
+            ",
+            params![
+                source_playlist_id,
+                normalized_url,
+                target_playlist_id,
+                new_file_path,
+                new_file_name,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if moved > 0 {
+        transaction
+            .execute(
+                "
+                DELETE FROM playlist_track_file_links
+                WHERE playlist_id = ?1 AND soundcloud_url = ?2
+                ",
+                params![source_playlist_id, normalized_url],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(moved > 0)
+}
+
+pub fn move_playlist_track_local_file_link_by_file_path(
+    db_path: &Path,
+    source_playlist_id: i64,
+    target_playlist_id: i64,
+    source_file_path: &str,
+    new_file_path: Option<&str>,
+    new_file_name: Option<&str>,
+) -> Result<bool, String> {
+    if source_playlist_id == target_playlist_id {
+        return Ok(false);
+    }
+
+    let normalized_source_file_path = source_file_path.trim();
+    if normalized_source_file_path.is_empty() {
+        return Ok(false);
+    }
+
+    let connection = open_connection(db_path)?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+
+    let moved = transaction
+        .execute(
+            "
+            INSERT INTO playlist_track_file_links (
+                playlist_id,
+                soundcloud_url,
+                file_path,
+                file_name,
+                file_size_bytes,
+                modified_at,
+                local_cover_data_url,
+                local_title,
+                local_artist,
+                local_duration_seconds,
+                local_format,
+                local_bitrate_kbps,
+                local_bitrate_announced_kbps,
+                local_bitrate_real_kbps,
+                local_max_frequency_hz,
+                local_quality_label,
+                local_sample_rate_hz,
+                local_channels,
+                scanned_at
+            )
+            SELECT
+                ?3,
+                soundcloud_url,
+                COALESCE(?4, file_path),
+                COALESCE(?5, file_name),
+                file_size_bytes,
+                modified_at,
+                local_cover_data_url,
+                local_title,
+                local_artist,
+                local_duration_seconds,
+                local_format,
+                local_bitrate_kbps,
+                local_bitrate_announced_kbps,
+                local_bitrate_real_kbps,
+                local_max_frequency_hz,
+                local_quality_label,
+                local_sample_rate_hz,
+                local_channels,
+                scanned_at
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1 AND file_path = ?2
+            ON CONFLICT(playlist_id, soundcloud_url) DO UPDATE SET
+                file_path = excluded.file_path,
+                file_name = excluded.file_name,
+                file_size_bytes = excluded.file_size_bytes,
+                modified_at = excluded.modified_at,
+                local_cover_data_url = excluded.local_cover_data_url,
+                local_title = excluded.local_title,
+                local_artist = excluded.local_artist,
+                local_duration_seconds = excluded.local_duration_seconds,
+                local_format = excluded.local_format,
+                local_bitrate_kbps = excluded.local_bitrate_kbps,
+                local_bitrate_announced_kbps = excluded.local_bitrate_announced_kbps,
+                local_bitrate_real_kbps = excluded.local_bitrate_real_kbps,
+                local_max_frequency_hz = excluded.local_max_frequency_hz,
+                local_quality_label = excluded.local_quality_label,
+                local_sample_rate_hz = excluded.local_sample_rate_hz,
+                local_channels = excluded.local_channels,
+                scanned_at = excluded.scanned_at
+            ",
+            params![
+                source_playlist_id,
+                normalized_source_file_path,
+                target_playlist_id,
+                new_file_path,
+                new_file_name,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if moved > 0 {
+        transaction
+            .execute(
+                "
+                DELETE FROM playlist_track_file_links
+                WHERE playlist_id = ?1 AND file_path = ?2
+                ",
+                params![source_playlist_id, normalized_source_file_path],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(moved > 0)
 }
 
 pub fn update_playlist_track_cutoff_analysis(

@@ -88,6 +88,12 @@ struct PlaylistGlobalAudioAnalysisResult {
     failed_tracks: usize,
 }
 
+#[derive(Serialize)]
+struct MovePlaylistTrackResult {
+    moved_local_link: bool,
+    moved_local_file_path: Option<String>,
+}
+
 #[tauri::command]
 fn get_connection_status(state: State<AppState>) -> Result<SoundCloudConfigStatus, String> {
     let configured = config::load_soundcloud_secrets().is_ok();
@@ -310,6 +316,220 @@ fn dissociate_playlist_track_local_file(
 }
 
 #[tauri::command]
+fn move_track_between_playlists(
+    state: State<AppState>,
+    source_playlist_id: i64,
+    target_playlist_id: i64,
+    track_id: i64,
+    track_permalink_url: Option<String>,
+    local_file_path: Option<String>,
+    _local_file_name: Option<String>,
+) -> Result<MovePlaylistTrackResult, String> {
+    let track_url = track_permalink_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let local_file_path = local_file_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let source_folder = db::get_playlist_folder_link(&state.db_path, source_playlist_id)?;
+    let target_folder = db::get_playlist_folder_link(&state.db_path, target_playlist_id)?;
+    let source_has_folder = source_folder.is_some();
+    let target_has_folder = target_folder.is_some();
+    if source_has_folder != target_has_folder {
+        return Err(
+            "Deplacement refuse: la playlist cible doit avoir le meme statut de dossier local (associe/non associe)."
+                .to_string(),
+        );
+    }
+
+    let mut relocated_file_path: Option<String> = None;
+    let mut relocated_file_name: Option<String> = None;
+    let mut moved_local_link_by_url = false;
+    let mut rollback_source_path: Option<PathBuf> = None;
+    let mut rollback_destination_path: Option<PathBuf> = None;
+
+    if source_has_folder && target_has_folder {
+        let source_folder_path = source_folder
+            .as_deref()
+            .ok_or_else(|| "Dossier local source introuvable.".to_string())?;
+        let target_folder_path = target_folder
+            .as_deref()
+            .ok_or_else(|| "Dossier local cible introuvable.".to_string())?;
+
+        if Path::new(source_folder_path) == Path::new(target_folder_path) {
+            return Err(
+                "Deplacement local refuse: la playlist cible pointe vers le meme dossier local que la source."
+                    .to_string(),
+            );
+        }
+
+        let local_link_info = if let Some(track_url) = track_url.as_deref() {
+            if let Some(info) = db::get_playlist_track_local_file_link_info(
+                &state.db_path,
+                source_playlist_id,
+                track_url,
+            )? {
+                moved_local_link_by_url = true;
+                Some(info)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let (existing_file_path, existing_file_name) = match local_link_info {
+            Some(info) => info,
+            None => {
+                let fallback_source_path = local_file_path
+                    .as_deref()
+                    .ok_or_else(|| "Aucun fichier local associe a cette track dans la playlist source.".to_string())?;
+                db::get_playlist_track_local_file_link_info_by_file_path(
+                    &state.db_path,
+                    source_playlist_id,
+                    fallback_source_path,
+                )?
+                .ok_or_else(|| "Aucun fichier local associe a cette track dans la playlist source.".to_string())?
+            }
+        };
+
+        let source_path = PathBuf::from(existing_file_path);
+        if !source_path.exists() {
+            return Err("Fichier local introuvable pour la track a deplacer.".to_string());
+        }
+
+        let target_dir = PathBuf::from(target_folder_path);
+        std::fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+
+        let source_parent_canonical = source_path
+            .parent()
+            .ok_or_else(|| "Impossible de determiner le dossier source du fichier local.".to_string())?
+            .canonicalize()
+            .map_err(|error| format!("Impossible de resoudre le dossier source: {error}"))?;
+        let target_dir_canonical = target_dir
+            .canonicalize()
+            .map_err(|error| format!("Impossible de resoudre le dossier cible: {error}"))?;
+
+        if source_parent_canonical == target_dir_canonical {
+            return Err(
+                "Deplacement local annule: le fichier source est deja dans le dossier cible reel."
+                    .to_string(),
+            );
+        }
+
+        let mut destination_path = target_dir.join(&existing_file_name);
+        if destination_path.exists() {
+            let source_stem = Path::new(&existing_file_name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("audio")
+                .to_string();
+            let extension = Path::new(&existing_file_name)
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| format!(".{value}"))
+                .unwrap_or_default();
+
+            let mut suffix = 1usize;
+            loop {
+                let candidate = target_dir.join(format!("{source_stem} ({suffix}){extension}"));
+                if !candidate.exists() {
+                    destination_path = candidate;
+                    break;
+                }
+                suffix += 1;
+            }
+        }
+
+        match std::fs::rename(&source_path, &destination_path) {
+            Ok(()) => {}
+            Err(_) => {
+                std::fs::copy(&source_path, &destination_path)
+                    .map_err(|error| format!("Impossible de deplacer le fichier local: {error}"))?;
+                std::fs::remove_file(&source_path)
+                    .map_err(|error| format!("Impossible de nettoyer l'ancien fichier local: {error}"))?;
+            }
+        }
+
+        if !destination_path.exists() {
+            return Err("Le fichier local n'a pas ete trouve apres le deplacement.".to_string());
+        }
+
+        relocated_file_path = Some(destination_path.to_string_lossy().to_string());
+        relocated_file_name = destination_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string());
+        rollback_source_path = Some(source_path);
+        rollback_destination_path = Some(destination_path);
+    }
+
+    let access_token = db::get_access_token(&state.db_path)?
+        .ok_or_else(|| "Aucun token SoundCloud trouvé. Connecte-toi d'abord.".to_string())?;
+
+    if let Err(soundcloud_error) = soundcloud::move_track_between_playlists(
+        &access_token,
+        source_playlist_id,
+        target_playlist_id,
+        track_id,
+    ) {
+        if let (Some(source_path), Some(destination_path)) = (
+            rollback_source_path.as_ref(),
+            rollback_destination_path.as_ref(),
+        ) {
+            if destination_path.exists() {
+                let rollback_result = std::fs::rename(destination_path, source_path).or_else(|_| {
+                    std::fs::copy(destination_path, source_path)?;
+                    std::fs::remove_file(destination_path)
+                });
+
+                if let Err(rollback_error) = rollback_result {
+                    return Err(format!(
+                        "Echec move SoundCloud ({soundcloud_error}) + rollback local impossible ({rollback_error})."
+                    ));
+                }
+            }
+        }
+
+        return Err(soundcloud_error);
+    }
+
+    let moved_local_link = if moved_local_link_by_url {
+        db::move_playlist_track_local_file_link(
+            &state.db_path,
+            source_playlist_id,
+            target_playlist_id,
+            track_url
+                .as_deref()
+                .ok_or_else(|| "URL SoundCloud manquante pour mise a jour locale.".to_string())?,
+            relocated_file_path.as_deref(),
+            relocated_file_name.as_deref(),
+        )?
+    } else if let Some(source_path) = local_file_path.as_deref() {
+        db::move_playlist_track_local_file_link_by_file_path(
+            &state.db_path,
+            source_playlist_id,
+            target_playlist_id,
+            source_path,
+            relocated_file_path.as_deref(),
+            relocated_file_name.as_deref(),
+        )?
+    } else {
+        false
+    };
+
+    Ok(MovePlaylistTrackResult {
+        moved_local_link,
+        moved_local_file_path: relocated_file_path,
+    })
+}
+
+#[tauri::command]
 fn embed_local_mp3_cover(file_path: String, artwork_url: String) -> Result<(), String> {
     local_files::embed_cover_into_mp3(file_path.trim(), artwork_url.trim())
 }
@@ -459,6 +679,7 @@ pub fn run() {
             dissociate_playlist_local_folder,
             associate_playlist_track_local_file,
             dissociate_playlist_track_local_file,
+            move_track_between_playlists,
             embed_local_mp3_cover,
             export_local_spectrogram_jpg,
             generate_local_spectrogram_preview,

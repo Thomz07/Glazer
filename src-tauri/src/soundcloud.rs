@@ -381,6 +381,7 @@ pub fn fetch_user_playlists(
             is_private: item.sharing.as_deref() == Some("private"),
             artwork_url: item.artwork_url.or(fallback_artwork),
             has_local_link: false,
+            has_local_folder: false,
             }
         })
         .collect())
@@ -471,6 +472,100 @@ pub fn fetch_playlist_details(
         permalink_url: payload.permalink_url,
         tracks,
     })
+}
+
+fn fetch_playlist_track_ids(access_token: &str, playlist_id: i64) -> Result<Vec<i64>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let response = client
+        .get(format!("{PLAYLIST_URL_BASE}/{playlist_id}"))
+        .query(&[("show_tracks", "true")])
+        .header("accept", "application/json; charset=utf-8")
+        .header("Authorization", format!("OAuth {access_token}"))
+        .send()
+        .map_err(|error| format!("Échec récupération playlist SoundCloud: {error}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("API playlist SoundCloud en erreur ({status}): {body}"));
+    }
+
+    let payload: SoundCloudPlaylistWithTracks = response
+        .json()
+        .map_err(|error| format!("Réponse playlist invalide: {error}"))?;
+
+    Ok(payload
+        .tracks
+        .into_iter()
+        .map(|track| track.id)
+        .filter(|id| *id > 0)
+        .collect())
+}
+
+fn update_playlist_tracks(access_token: &str, playlist_id: i64, track_ids: &[i64]) -> Result<(), String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let mut form_payload: Vec<(String, String)> = Vec::with_capacity(track_ids.len());
+    for track_id in track_ids {
+        form_payload.push(("playlist[tracks][][id]".to_string(), track_id.to_string()));
+    }
+
+    let response = client
+        .put(format!("{PLAYLIST_URL_BASE}/{playlist_id}"))
+        .header("accept", "application/json; charset=utf-8")
+        .header("Authorization", format!("OAuth {access_token}"))
+        .form(&form_payload)
+        .send()
+        .map_err(|error| format!("Échec mise à jour playlist SoundCloud: {error}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("API update playlist SoundCloud en erreur ({status}): {body}"));
+    }
+
+    Ok(())
+}
+
+pub fn move_track_between_playlists(
+    access_token: &str,
+    source_playlist_id: i64,
+    target_playlist_id: i64,
+    track_id: i64,
+) -> Result<(), String> {
+    if source_playlist_id == target_playlist_id {
+        return Err("La playlist source et la playlist cible sont identiques.".to_string());
+    }
+
+    if track_id <= 0 {
+        return Err("Track SoundCloud invalide pour le déplacement.".to_string());
+    }
+
+    let source_track_ids = fetch_playlist_track_ids(access_token, source_playlist_id)?;
+    if !source_track_ids.contains(&track_id) {
+        return Err("La track n'existe pas dans la playlist source.".to_string());
+    }
+
+    let mut target_track_ids = fetch_playlist_track_ids(access_token, target_playlist_id)?;
+    if !target_track_ids.contains(&track_id) {
+        target_track_ids.push(track_id);
+        update_playlist_tracks(access_token, target_playlist_id, &target_track_ids)?;
+    }
+
+    let updated_source_track_ids: Vec<i64> = source_track_ids
+        .into_iter()
+        .filter(|id| *id != track_id)
+        .collect();
+    update_playlist_tracks(access_token, source_playlist_id, &updated_source_track_ids)?;
+
+    Ok(())
 }
 
 fn fetch_missing_tracks_from_playlist_tracks_endpoint(

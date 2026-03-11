@@ -14,6 +14,7 @@ type Playlist = {
   is_private: boolean;
   artwork_url?: string | null;
   has_local_link: boolean;
+  has_local_folder: boolean;
 };
 
 type PlaylistTrack = {
@@ -138,6 +139,11 @@ type PlaylistGlobalAudioAnalysisResult = {
   failed_tracks: number;
 };
 
+type MovePlaylistTrackResult = {
+  moved_local_link: boolean;
+  moved_local_file_path?: string | null;
+};
+
 const MAX_PLAYLIST_DETAILS_CACHE_SIZE = 4;
 
 function App() {
@@ -186,6 +192,8 @@ function App() {
   const [overwriteExistingGlobalAnalysis, setOverwriteExistingGlobalAnalysis] = useState(false);
   const [manualCutoffInputHz, setManualCutoffInputHz] = useState("");
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
+  const [targetPlaylistIdForMove, setTargetPlaylistIdForMove] = useState<number | "">("");
+  const [movingTrackBetweenPlaylists, setMovingTrackBetweenPlaylists] = useState(false);
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
   const playlistDetailsCacheRef = useRef<Map<number, PlaylistDetailsCacheEntry>>(new Map());
   const [refreshingPlaylistDetails, setRefreshingPlaylistDetails] = useState(false);
@@ -310,6 +318,29 @@ function App() {
       void removeTemporaryPreview(cleanupPath);
     };
   }, [selectedTrackInfo?.id, spectrogramAnalysisScope]);
+
+  useEffect(() => {
+    if (!selectedTrackInfo || !selectedPlaylistDetails) {
+      setTargetPlaylistIdForMove("");
+      return;
+    }
+
+    const sourceHasLocalFolder = Boolean(playlistFolderPath.trim());
+    const availableTargets = playlists.filter(
+      (playlist) =>
+        playlist.id !== selectedPlaylistDetails.id &&
+        playlist.has_local_folder === sourceHasLocalFolder,
+    );
+    if (availableTargets.length === 0) {
+      setTargetPlaylistIdForMove("");
+      return;
+    }
+
+    const currentTargetStillValid = availableTargets.some((playlist) => playlist.id === targetPlaylistIdForMove);
+    if (!currentTargetStillValid) {
+      setTargetPlaylistIdForMove(availableTargets[0].id);
+    }
+  }, [selectedTrackInfo?.id, selectedPlaylistDetails?.id, playlists]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -880,6 +911,72 @@ function App() {
     }
   }
 
+  async function moveSelectedTrackToAnotherPlaylist() {
+    if (!selectedPlaylistDetails || !selectedTrackInfo) {
+      return;
+    }
+
+    if (targetPlaylistIdForMove === "") {
+      setStatus(t("moveTrackNoTarget"));
+      return;
+    }
+
+    try {
+      setMovingTrackBetweenPlaylists(true);
+      const targetPlaylistId = Number(targetPlaylistIdForMove);
+      const result = await invoke<MovePlaylistTrackResult>("move_track_between_playlists", {
+        sourcePlaylistId: selectedPlaylistDetails.id,
+        targetPlaylistId,
+        trackId: selectedTrackInfo.id,
+        trackPermalinkUrl:
+          selectedTrackInfo.permalink_url ??
+          selectedTrackInfo.local_file?.matched_soundcloud_url ??
+          null,
+        localFilePath: selectedTrackInfo.local_file?.file_path ?? null,
+        localFileName: selectedTrackInfo.local_file?.file_name ?? null,
+      });
+
+      const refreshedSourceDetails = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
+        playlistId: selectedPlaylistDetails.id,
+        headless: debugSettings.soundcloud_fallback_headless,
+      });
+      setSelectedPlaylistDetailsWithCache(refreshedSourceDetails);
+
+      // Refresh destination playlist cache too so the moved track appears immediately when opened.
+      try {
+        const refreshedTargetDetails = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
+          playlistId: targetPlaylistId,
+          headless: debugSettings.soundcloud_fallback_headless,
+        });
+        upsertPlaylistDetailsCache(refreshedTargetDetails);
+      } catch {
+        // If target refresh fails, avoid stale cache by forcing a fresh load on next open.
+        playlistDetailsCacheRef.current.delete(targetPlaylistId);
+      }
+
+      setSelectedTrackInfo(null);
+      await loadPlaylistLocalFolderAssociation(selectedPlaylistDetails.id);
+      await syncPlaylists(true);
+
+      if (result.moved_local_link) {
+        const destination = result.moved_local_file_path?.trim();
+        setStatus(
+          destination
+            ? `${t("moveTrackDoneWithLocal")} -> ${destination}`
+            : t("moveTrackDoneWithLocal"),
+        );
+      } else if (playlistFolderPath) {
+        setStatus(t("moveTrackDoneWithoutLocal"));
+      } else {
+        setStatus(t("moveTrackDone"));
+      }
+    } catch (error) {
+      setStatus(`${t("moveTrackError")}: ${String(error)}`);
+    } finally {
+      setMovingTrackBetweenPlaylists(false);
+    }
+  }
+
   async function embedSelectedTrackCoverIntoLocalMp3() {
     if (!selectedPlaylistDetails || !selectedTrackInfo?.local_file?.file_path) {
       return;
@@ -1304,6 +1401,13 @@ function App() {
   }
 
   const filteredTracks = selectedPlaylistDetails ? getFilteredTracks(selectedPlaylistDetails.tracks) : [];
+  const availableMoveTargetPlaylists = selectedPlaylistDetails
+    ? playlists.filter(
+      (playlist) =>
+        playlist.id !== selectedPlaylistDetails.id &&
+        playlist.has_local_folder === Boolean(playlistFolderPath.trim()),
+    )
+    : [];
   const analyzableTracksCount = selectedPlaylistDetails
     ? selectedPlaylistDetails.tracks.filter((track) => Boolean(track.local_file)).length
     : 0;
@@ -1715,6 +1819,32 @@ function App() {
                           </button>
                         ) : null}
                       </div>
+
+                      {availableMoveTargetPlaylists.length > 0 ? (
+                        <div className="panel-actions">
+                          <select
+                            value={targetPlaylistIdForMove}
+                            onChange={(event) => setTargetPlaylistIdForMove(Number(event.currentTarget.value))}
+                            aria-label={t("moveTrackToPlaylistLabel")}
+                            disabled={movingTrackBetweenPlaylists}
+                          >
+                            {availableMoveTargetPlaylists.map((playlist) => (
+                              <option key={playlist.id} value={playlist.id}>
+                                {playlist.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={moveSelectedTrackToAnotherPlaylist}
+                            disabled={movingTrackBetweenPlaylists || targetPlaylistIdForMove === ""}
+                          >
+                            {movingTrackBetweenPlaylists ? t("moveTrackRunning") : t("moveTrackButton")}
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="spectrogram-preview-meta">{t("moveTrackNoCompatibleTarget")}</p>
+                      )}
                     </section>
 
                     {playlistFolderPath ? (
@@ -1812,6 +1942,7 @@ function App() {
                                 <p><strong>{t("localSampleRateLabel")}:</strong> {selectedTrackInfo.local_file.local_sample_rate_hz ? `${formatCount(selectedTrackInfo.local_file.local_sample_rate_hz)} Hz` : "—"}</p>
                                 <p><strong>{t("localChannelsLabel")}:</strong> {formatCount(selectedTrackInfo.local_file.local_channels)}</p>
                                 <p><strong>{t("fileSizeLabel")}:</strong> {formatFileSize(selectedTrackInfo.local_file.file_size_bytes)}</p>
+                                <p><strong>{t("localFilePathLabel")}:</strong> {formatText(selectedTrackInfo.local_file.file_path)}</p>
                               </div>
                             </>
                           ) : (

@@ -8,6 +8,7 @@ pub struct Playlist {
     pub is_private: bool,
     pub artwork_url: Option<String>,
     pub has_local_link: bool,
+    pub has_local_folder: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
