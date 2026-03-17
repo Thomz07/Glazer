@@ -92,6 +92,10 @@ type PlaylistCoverMode = "first" | "random";
 
 type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
+  download_embed_cover?: boolean;
+  download_rename_with_soundcloud_title?: boolean;
+  hypeddit_download_headless?: boolean;
+  hypeddit_download_comment?: string;
 };
 
 type PlaylistLocalFolderAssociation = {
@@ -166,6 +170,10 @@ function App() {
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [savingPlaylistCoverMode, setSavingPlaylistCoverMode] = useState(false);
+  const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
+  const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
+  const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
   const [panelCoverQuality, setPanelCoverQuality] = useState<CoverQuality>("t500x500");
   const [language, setLanguage] = useState<Language>("fr");
@@ -184,6 +192,9 @@ function App() {
   const [associatingLocalFile, setAssociatingLocalFile] = useState(false);
   const [dissociatingLocalFile, setDissociatingLocalFile] = useState(false);
   const [embeddingLocalCover, setEmbeddingLocalCover] = useState(false);
+  const [downloadingFromHypeddit] = useState(false);
+  const [showHypedditDownloadMenu, setShowHypedditDownloadMenu] = useState(false);
+  const [overwriteExistingHypedditDownload, setOverwriteExistingHypedditDownload] = useState(false);
   const [exportingSpectrogram, setExportingSpectrogram] = useState(false);
   const [loadingSpectrogramPreview, setLoadingSpectrogramPreview] = useState(false);
   const [savingManualCutoff, setSavingManualCutoff] = useState(false);
@@ -322,6 +333,8 @@ function App() {
   useEffect(() => {
     if (!selectedTrackInfo || !selectedPlaylistDetails) {
       setTargetPlaylistIdForMove("");
+      setShowHypedditDownloadMenu(false);
+      setOverwriteExistingHypedditDownload(false);
       return;
     }
 
@@ -576,8 +589,53 @@ function App() {
     try {
       const settings = await invoke<MiscSettings>("get_misc_settings");
       setPlaylistCoverMode(settings.playlist_cover_mode ?? "first");
+      setDownloadEmbedCover(Boolean(settings.download_embed_cover));
+      setDownloadRenameWithSoundcloudTitle(Boolean(settings.download_rename_with_soundcloud_title));
+      setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
+      setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
     } catch (error) {
       setStatus(`${t("statusMiscSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveDownloadEmbedCover(enabled: boolean) {
+    try {
+      await invoke("set_download_embed_cover", { enabled });
+      setDownloadEmbedCover(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveDownloadRenameWithSoundcloudTitle(enabled: boolean) {
+    try {
+      await invoke("set_download_rename_with_soundcloud_title", { enabled });
+      setDownloadRenameWithSoundcloudTitle(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadHeadless(enabled: boolean) {
+    try {
+      await invoke("set_hypeddit_download_headless", { enabled });
+      setHypedditDownloadHeadless(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadComment(comment: string) {
+    const normalized = comment.trim() || "Nice tune!";
+    try {
+      await invoke("set_hypeddit_download_comment", { comment: normalized });
+      setHypedditDownloadComment(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
     }
   }
 
@@ -762,8 +820,9 @@ function App() {
         `${t("localScanDone")}: ${result.matched_files}/${result.scanned_files} ${t("localScanMatched")}`,
       );
 
-      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+      const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
         playlistId: selectedPlaylistDetails.id,
+        headless: debugSettings.soundcloud_fallback_headless,
       });
       const linkedTracks = details.tracks.filter((track) => Boolean(track.local_file)).length;
       setStatus(
@@ -1013,6 +1072,26 @@ function App() {
     } finally {
       setEmbeddingLocalCover(false);
     }
+  }
+
+  async function revealSelectedTrackLocalFileInExplorer() {
+    const localFilePath = selectedTrackInfo?.local_file?.file_path;
+    if (!localFilePath) {
+      setStatus(t("localRevealFileMissingPath"));
+      return;
+    }
+
+    try {
+      await invoke("reveal_local_file_in_explorer", { filePath: localFilePath });
+    } catch (error) {
+      setStatus(`${t("localRevealFileError")}: ${String(error)}`);
+    }
+  }
+
+  async function downloadSelectedTrackFromHypeddit() {
+    setShowHypedditDownloadMenu(false);
+    setOverwriteExistingHypedditDownload(false);
+    setStatus("Hypeddit download temporarily disabled.");
   }
 
   async function refreshSelectedPlaylistDetails() {
@@ -1401,11 +1480,17 @@ function App() {
   }
 
   const filteredTracks = selectedPlaylistDetails ? getFilteredTracks(selectedPlaylistDetails.tracks) : [];
+  const hasAvailableLocalFolder = Boolean(playlistFolderPath.trim()) && playlistFolderAvailable;
+  const canDownloadSelectedTrackFromHypeddit =
+    hasAvailableLocalFolder &&
+    Boolean(selectedTrackInfo?.associated_url) &&
+    getAssociatedSource(selectedTrackInfo?.associated_url) === "hypeddit" &&
+    Boolean(selectedTrackInfo?.permalink_url);
   const availableMoveTargetPlaylists = selectedPlaylistDetails
     ? playlists.filter(
       (playlist) =>
         playlist.id !== selectedPlaylistDetails.id &&
-        playlist.has_local_folder === Boolean(playlistFolderPath.trim()),
+        playlist.has_local_folder === hasAvailableLocalFolder,
     )
     : [];
   const analyzableTracksCount = selectedPlaylistDetails
@@ -1509,7 +1594,20 @@ function App() {
                   </label>
                   {playlistFolderPath ? <p className="local-folder-path">{playlistFolderPath}</p> : null}
                   {playlistFolderPath && !playlistFolderAvailable ? (
-                    <p className="local-folder-warning">{t("localFolderUnavailable")}</p>
+                    <div className="local-folder-warning-row">
+                      <p className="local-folder-warning">{t("localFolderUnavailable")}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedPlaylistDetails) {
+                            void loadPlaylistLocalFolderAssociation(selectedPlaylistDetails.id);
+                          }
+                        }}
+                        disabled={loadingPlaylistFolder}
+                      >
+                        {t("refresh")}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
                 <button
@@ -1550,7 +1648,15 @@ function App() {
                       </svg>
                     )}
                   </button>
-                  <button type="button" onClick={() => setIsFilterMenuOpen((current) => !current)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsActionsMenuOpen(false);
+                      setConfirmGlobalAudioAnalysis(false);
+                      setOverwriteExistingGlobalAnalysis(false);
+                      setIsFilterMenuOpen((current) => !current);
+                    }}
+                  >
                     {hasActiveTrackFilters ? `${t("filterButton")} (${activeFilterCount})` : t("filterButton")}
                   </button>
                   {selectedPlaylistDetails ? (
@@ -1641,7 +1747,7 @@ function App() {
                       >
                         {refreshingPlaylistDetails ? t("playlistRefreshRunning") : t("playlistRefreshAction")}
                       </button>
-                      {playlistFolderPath && !confirmGlobalAudioAnalysis ? (
+                      {hasAvailableLocalFolder && !confirmGlobalAudioAnalysis ? (
                         <button
                           type="button"
                           className="filter-reset"
@@ -1651,7 +1757,7 @@ function App() {
                           {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisAction")}
                         </button>
                       ) : null}
-                      {playlistFolderPath && confirmGlobalAudioAnalysis ? (
+                      {hasAvailableLocalFolder && confirmGlobalAudioAnalysis ? (
                         <>
                           <p className="actions-disclaimer">{t("globalAudioAnalysisDisclaimer")}</p>
                           <p className="actions-disclaimer">
@@ -1716,7 +1822,19 @@ function App() {
               {selectedPlaylistDetails.tracks.length > 0 && filteredTracks.length > 0 && trackViewMode === "list" ? (
                 <ul className="track-list">
                   {filteredTracks.map((track) => (
-                    <li key={track.id} className="track-item">
+                    <li
+                      key={track.id}
+                      className="track-item"
+                      onClick={() => openTrackInfo(track)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openTrackInfo(track);
+                        }
+                      }}
+                    >
                       {track.artwork_url ? (
                         <img src={track.artwork_url} alt={track.title} className="track-cover" />
                       ) : (
@@ -1726,9 +1844,6 @@ function App() {
                         <strong>{track.title}</strong>
                         <p>{track.artist ?? t("unknownArtist")}</p>
                       </div>
-                      <button type="button" className="track-info-btn" onClick={() => openTrackInfo(track)}>
-                        {t("info")}
-                      </button>
                     </li>
                   ))}
                 </ul>
@@ -1789,7 +1904,31 @@ function App() {
                           </button>
                         ) : null}
 
-                        {selectedTrackInfo.local_file ? (
+                        {canDownloadSelectedTrackFromHypeddit ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowHypedditDownloadMenu((current) => !current);
+                              if (showHypedditDownloadMenu) {
+                                setOverwriteExistingHypedditDownload(false);
+                              }
+                            }}
+                            disabled={downloadingFromHypeddit}
+                          >
+                            {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
+                          </button>
+                        ) : null}
+
+                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
+                          <button
+                            type="button"
+                            onClick={revealSelectedTrackLocalFileInExplorer}
+                          >
+                            {t("localRevealFileButton")}
+                          </button>
+                        ) : null}
+
+                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
                           <button
                             type="button"
                             onClick={embedSelectedTrackCoverIntoLocalMp3}
@@ -1799,7 +1938,7 @@ function App() {
                           </button>
                         ) : null}
 
-                        {selectedTrackInfo.local_file ? (
+                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
                           <button
                             type="button"
                             onClick={exportSelectedTrackSpectrogram}
@@ -1809,7 +1948,7 @@ function App() {
                           </button>
                         ) : null}
 
-                        {selectedTrackInfo.local_file ? (
+                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
                           <button
                             type="button"
                             onClick={dissociateLocalFileFromSelectedTrack}
@@ -1820,8 +1959,41 @@ function App() {
                         ) : null}
                       </div>
 
+                      {canDownloadSelectedTrackFromHypeddit && showHypedditDownloadMenu ? (
+                        <div className="panel-actions hypeddit-download-menu">
+                          {selectedTrackInfo.local_file ? (
+                            <label className="setting-toggle actions-option">
+                              <input
+                                type="checkbox"
+                                checked={overwriteExistingHypedditDownload}
+                                onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
+                                disabled={downloadingFromHypeddit}
+                              />
+                              <span>{t("hypedditDownloadOverwriteLabel")}</span>
+                            </label>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={downloadSelectedTrackFromHypeddit}
+                            disabled={!canDownloadSelectedTrackFromHypeddit || downloadingFromHypeddit}
+                          >
+                            {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadConfirm")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowHypedditDownloadMenu(false);
+                              setOverwriteExistingHypedditDownload(false);
+                            }}
+                            disabled={downloadingFromHypeddit}
+                          >
+                            {t("globalAudioAnalysisCancel")}
+                          </button>
+                        </div>
+                      ) : null}
+
                       {availableMoveTargetPlaylists.length > 0 ? (
-                        <div className="panel-actions">
+                        <div className="panel-actions move-track-controls">
                           <select
                             value={targetPlaylistIdForMove}
                             onChange={(event) => setTargetPlaylistIdForMove(Number(event.currentTarget.value))}
@@ -1847,7 +2019,7 @@ function App() {
                       )}
                     </section>
 
-                    {playlistFolderPath ? (
+                    {hasAvailableLocalFolder ? (
                       <section className="track-panel-actions-card">
                         <h3>{t("localSpectrogramPreviewTitle")}</h3>
                         <div className="panel-actions">
@@ -1914,7 +2086,7 @@ function App() {
                         </div>
                       </section>
 
-                      {playlistFolderPath ? (
+                      {hasAvailableLocalFolder ? (
                         <section className="track-panel-section">
                           <div className="panel-head">
                             <h3>{t("localFileTitle")}</h3>
@@ -2028,6 +2200,52 @@ function App() {
               <option value="half">{t("spectrogramScopeHalf")}</option>
               <option value="full">{t("spectrogramScopeFull")}</option>
             </select>
+          </label>
+
+          <h3>{t("downloadSettingsTitle")}</h3>
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={downloadEmbedCover}
+              onChange={(event) => saveDownloadEmbedCover(event.currentTarget.checked)}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={downloadRenameWithSoundcloudTitle}
+              onChange={(event) => saveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={hypedditDownloadHeadless}
+              onChange={(event) => saveHypedditDownloadHeadless(event.currentTarget.checked)}
+            />
+            <span>{t("downloadHypedditHeadlessSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadHypedditCommentLabel")}</span>
+            <input
+              type="text"
+              value={hypedditDownloadComment}
+              placeholder={t("downloadHypedditCommentPlaceholder")}
+              onChange={(event) => setHypedditDownloadComment(event.currentTarget.value)}
+              onBlur={() => { void saveHypedditDownloadComment(hypedditDownloadComment); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveHypedditDownloadComment(hypedditDownloadComment);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
           </label>
 
           <h3>{t("connectionsTitle")}</h3>

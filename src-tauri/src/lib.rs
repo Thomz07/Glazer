@@ -6,6 +6,7 @@ mod soundcloud;
 mod spotify;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use models::{Playlist, PlaylistDetails};
 use serde::Serialize;
@@ -38,6 +39,10 @@ struct DebugSettings {
 #[derive(Serialize)]
 struct MiscSettings {
     playlist_cover_mode: String,
+    download_embed_cover: bool,
+    download_rename_with_soundcloud_title: bool,
+    hypeddit_download_headless: bool,
+    hypeddit_download_comment: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -616,6 +621,61 @@ fn analyze_playlist_local_audio_quality(
 }
 
 #[tauri::command]
+fn reveal_local_file_in_explorer(file_path: String) -> Result<(), String> {
+    let trimmed_path = file_path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Chemin de fichier local vide.".to_string());
+    }
+
+    let target_path = PathBuf::from(trimmed_path);
+    if !target_path.exists() {
+        return Err("Fichier local introuvable.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg("-R")
+            .arg(&target_path)
+            .status()
+            .map_err(|error| format!("Impossible d'ouvrir Finder: {error}"))?;
+
+        if !status.success() {
+            return Err("Impossible de révéler le fichier dans Finder.".to_string());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("explorer")
+            .arg(format!("/select,{}", target_path.to_string_lossy()))
+            .status()
+            .map_err(|error| format!("Impossible d'ouvrir Explorer: {error}"))?;
+
+        if !status.success() {
+            return Err("Impossible de révéler le fichier dans Explorer.".to_string());
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let folder_path = target_path
+            .parent()
+            .ok_or_else(|| "Impossible de déterminer le dossier parent du fichier.".to_string())?;
+        let status = Command::new("xdg-open")
+            .arg(folder_path)
+            .status()
+            .map_err(|error| format!("Impossible d'ouvrir le gestionnaire de fichiers: {error}"))?;
+
+        if !status.success() {
+            return Err("Impossible d'ouvrir le gestionnaire de fichiers.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_debug_settings(state: State<AppState>) -> Result<DebugSettings, String> {
     Ok(DebugSettings {
         soundcloud_fallback_headless: db::get_soundcloud_fallback_headless(&state.db_path)?,
@@ -637,12 +697,41 @@ fn set_logs_enabled(state: State<AppState>, enabled: bool) -> Result<(), String>
 fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
     Ok(MiscSettings {
         playlist_cover_mode: db::get_playlist_cover_mode(&state.db_path)?,
+        download_embed_cover: db::get_download_embed_cover(&state.db_path)?,
+        download_rename_with_soundcloud_title: db::get_download_rename_with_soundcloud_title(
+            &state.db_path,
+        )?,
+        hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
+        hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
     })
 }
 
 #[tauri::command]
 fn set_playlist_cover_mode(state: State<AppState>, mode: String) -> Result<(), String> {
     db::set_playlist_cover_mode(&state.db_path, mode.trim())
+}
+
+#[tauri::command]
+fn set_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_download_embed_cover(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_download_rename_with_soundcloud_title(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_hypeddit_download_headless(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_hypeddit_download_headless(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_hypeddit_download_comment(state: State<AppState>, comment: String) -> Result<(), String> {
+    db::set_hypeddit_download_comment(&state.db_path, comment.as_str())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -686,11 +775,16 @@ pub fn run() {
             delete_local_spectrogram_preview,
             save_playlist_track_cutoff_analysis,
             analyze_playlist_local_audio_quality,
+            reveal_local_file_in_explorer,
             get_debug_settings,
             set_soundcloud_fallback_headless,
             set_logs_enabled,
             get_misc_settings,
-            set_playlist_cover_mode
+            set_playlist_cover_mode,
+            set_download_embed_cover,
+            set_download_rename_with_soundcloud_title,
+            set_hypeddit_download_headless,
+            set_hypeddit_download_comment
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

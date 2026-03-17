@@ -483,6 +483,139 @@ pub fn set_playlist_cover_mode(db_path: &Path, mode: &str) -> Result<(), String>
     Ok(())
 }
 
+pub fn get_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'download_embed_cover'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(false))
+}
+
+pub fn set_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('download_embed_cover', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'download_rename_with_soundcloud_title'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(false))
+}
+
+pub fn set_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('download_rename_with_soundcloud_title', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_headless(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_headless'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(true))
+}
+
+pub fn set_hypeddit_download_headless(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_headless', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_comment(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_comment'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| "Nice tune!".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_comment(db_path: &Path, comment: &str) -> Result<(), String> {
+    let normalized = if comment.trim().is_empty() {
+        "Nice tune!".to_string()
+    } else {
+        comment.trim().to_string()
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_comment', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 pub fn save_playlist_folder_link(db_path: &Path, playlist_id: i64, folder_path: &str) -> Result<(), String> {
     let connection = open_connection(db_path)?;
     let updated_at = std::time::SystemTime::now()

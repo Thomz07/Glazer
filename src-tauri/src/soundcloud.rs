@@ -872,32 +872,55 @@ fn extract_associated_url(
 ) -> Option<String> {
     let soundcloud_permalink = clean_soundcloud_permalink(soundcloud_permalink);
 
-    let from_purchase = clean_external_url(purchase_url, soundcloud_permalink.as_deref());
-    if from_purchase.is_some() {
-        return from_purchase;
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Some(purchase_candidate) =
+        clean_external_url(purchase_url, soundcloud_permalink.as_deref())
+    {
+        candidates.push(purchase_candidate);
     }
 
-    let text = description?.trim();
-    if text.is_empty() {
-        return None;
-    }
-
-    for token in text.split_whitespace() {
-        let trimmed = token.trim_matches(|char: char| {
-            matches!(char, ',' | '.' | ';' | ')' | '(' | ']' | '[' | '"' | '\'')
-        });
-
-        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-            continue;
-        }
-
-        let candidate = clean_external_url(Some(trimmed), soundcloud_permalink.as_deref());
-        if candidate.is_some() {
-            return candidate;
+    if let Some(text) = description.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Ok(url_regex) = regex::Regex::new(r#"https?://[^\s<>'"\)\]]+"#) {
+            for matched in url_regex.find_iter(text) {
+                if let Some(candidate) =
+                    clean_external_url(Some(matched.as_str()), soundcloud_permalink.as_deref())
+                {
+                    candidates.push(candidate);
+                }
+            }
         }
     }
 
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| is_hypeddit_url(candidate))
+        .or_else(|| {
+            clean_external_url(purchase_url, soundcloud_permalink.as_deref()).or_else(|| {
+                description
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .and_then(|text| {
+                        text.split_whitespace().find_map(|token| {
+                            let trimmed = token.trim_matches(|char: char| {
+                                matches!(char, ',' | '.' | ';' | ')' | '(' | ']' | '[' | '"' | '\'')
+                            });
+                            clean_external_url(Some(trimmed), soundcloud_permalink.as_deref())
+                        })
+                    })
+            })
+        })
+}
+
+fn is_hypeddit_url(raw_url: &str) -> bool {
+    if let Ok(parsed) = url::Url::parse(raw_url) {
+        return parsed
+            .host_str()
+            .map(|host| host.to_ascii_lowercase().contains("hypeddit"))
+            .unwrap_or(false);
+    }
+
+    raw_url.to_ascii_lowercase().contains("hypeddit")
 }
 
 fn clean_external_url(raw: Option<&str>, soundcloud_permalink: Option<&str>) -> Option<String> {
