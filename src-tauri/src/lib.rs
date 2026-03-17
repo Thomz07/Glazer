@@ -6,10 +6,11 @@ mod soundcloud;
 mod spotify;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
-use models::{Playlist, PlaylistDetails};
-use serde::Serialize;
+use models::{LocalAudioFileInfo, Playlist, PlaylistDetails, PlaylistTrack};
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 struct AppState {
@@ -43,6 +44,8 @@ struct MiscSettings {
     download_rename_with_soundcloud_title: bool,
     hypeddit_download_headless: bool,
     hypeddit_download_comment: String,
+    hypeddit_download_name: String,
+    hypeddit_download_email: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -97,6 +100,60 @@ struct PlaylistGlobalAudioAnalysisResult {
 struct MovePlaylistTrackResult {
     moved_local_link: bool,
     moved_local_file_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HypedditScriptResult {
+    file_path: String,
+    file_name: String,
+    overwrote_existing: bool,
+}
+
+#[derive(Serialize)]
+struct HypedditDownloadResult {
+    file_path: String,
+    file_name: String,
+    overwrote_existing: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct HypedditDownloadProgressPayload {
+    phase: String,
+}
+
+fn sanitize_file_stem(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return "track".to_string();
+    }
+
+    let mut output = String::with_capacity(trimmed.len());
+    let mut last_was_space = false;
+    for character in trimmed.chars() {
+        let disallowed = matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*');
+        let sanitized = if disallowed || character.is_control() {
+            '_'
+        } else {
+            character
+        };
+
+        if sanitized.is_whitespace() {
+            if !last_was_space {
+                output.push(' ');
+            }
+            last_was_space = true;
+        } else {
+            output.push(sanitized);
+            last_was_space = false;
+        }
+    }
+
+    let collapsed = output.trim();
+    if collapsed.is_empty() {
+        "track".to_string()
+    } else {
+        collapsed.to_string()
+    }
 }
 
 #[tauri::command]
@@ -240,6 +297,43 @@ fn get_playlist_details_with_fallback(
 
     db::attach_local_file_infos(&state.db_path, playlist_id, &mut details.tracks)?;
     Ok(details)
+}
+
+#[tauri::command]
+fn get_playlist_track_local_file_info(
+    state: State<AppState>,
+    playlist_id: i64,
+    track_permalink_url: String,
+) -> Result<Option<LocalAudioFileInfo>, String> {
+    let permalink = track_permalink_url.trim();
+    if permalink.is_empty() {
+        return Ok(None);
+    }
+
+    let mut track = PlaylistTrack {
+        id: 0,
+        title: String::new(),
+        duration_ms: None,
+        artist: None,
+        permalink_url: Some(permalink.to_string()),
+        associated_url: None,
+        artwork_url: None,
+        genre: None,
+        bpm: None,
+        key_signature: None,
+        playback_count: None,
+        likes_count: None,
+        reposts_count: None,
+        comment_count: None,
+        created_at: None,
+        release_date: None,
+        tag_list: None,
+        label_name: None,
+        local_file: None,
+    };
+
+    db::attach_local_file_infos(&state.db_path, playlist_id, std::slice::from_mut(&mut track))?;
+    Ok(track.local_file)
 }
 
 #[tauri::command]
@@ -621,6 +715,192 @@ fn analyze_playlist_local_audio_quality(
 }
 
 #[tauri::command]
+fn download_hypeddit_track_to_local_folder(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    playlist_id: i64,
+    track_permalink_url: String,
+    track_title: String,
+    hypeddit_url: String,
+    artwork_url: Option<String>,
+    overwrite_existing: bool,
+    existing_file_path: Option<String>,
+) -> Result<HypedditDownloadResult, String> {
+    if !db::has_spotify_access_token(&state.db_path)? {
+        return Err(
+            "Connexion Spotify requise pour automatiser les gates Hypeddit. Connecte Spotify puis recommence."
+                .to_string(),
+        );
+    }
+
+    let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
+        .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
+    let folder = PathBuf::from(folder_path.trim());
+
+    if !folder.exists() || !folder.is_dir() {
+        return Err("Le dossier local associé est introuvable.".to_string());
+    }
+
+    let hypeddit_url_trimmed = hypeddit_url.trim();
+    if hypeddit_url_trimmed.is_empty() {
+        return Err("Lien Hypeddit introuvable pour cette track.".to_string());
+    }
+    if !hypeddit_url_trimmed.to_lowercase().contains("hypeddit") {
+        return Err("Le lien associé n'est pas un lien Hypeddit.".to_string());
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
+        .to_path_buf();
+    let script_path = project_root.join("scripts").join("hypeddit-download.mjs");
+
+    if !script_path.exists() {
+        return Err(format!(
+            "Script Hypeddit introuvable: {}",
+            script_path.display()
+        ));
+    }
+
+    let existing_file_path_trimmed = existing_file_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let hypeddit_headless = db::get_hypeddit_download_headless(&state.db_path)?;
+    let hypeddit_comment = db::get_hypeddit_download_comment(&state.db_path)?;
+    let hypeddit_name = db::get_hypeddit_download_name(&state.db_path)?;
+    let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
+    let browser_profile_dir = state
+        .db_path
+        .parent()
+        .map(|path| path.join("playwright-hypeddit-profile"))
+        .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
+    std::fs::create_dir_all(&browser_profile_dir)
+        .map_err(|error| format!("Impossible de préparer le profil navigateur Hypeddit: {error}"))?;
+
+    let mut child = Command::new("node")
+        .arg(script_path)
+        .arg(hypeddit_url_trimmed)
+        .arg(folder.to_string_lossy().to_string())
+        .arg(if overwrite_existing { "true" } else { "false" })
+        .arg(existing_file_path_trimmed)
+        .arg(if hypeddit_headless { "true" } else { "false" })
+        .arg(hypeddit_comment)
+        .arg(hypeddit_name)
+        .arg(hypeddit_email)
+        .arg(browser_profile_dir.to_string_lossy().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .current_dir(project_root)
+        .spawn()
+        .map_err(|error| format!("Impossible de lancer le download Hypeddit: {error}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Impossible de lire la sortie du download Hypeddit".to_string())?;
+    let reader = BufReader::new(stdout);
+
+    let mut result_payload: Option<String> = None;
+    let mut script_error: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("Lecture download Hypeddit impossible: {error}"))?;
+        if let Some(value) = line.strip_prefix("__PROGRESS__:") {
+            let _ = app.emit(
+                "hypeddit-download-progress",
+                HypedditDownloadProgressPayload {
+                    phase: value.to_string(),
+                },
+            );
+        }
+        if let Some(value) = line.strip_prefix("__ERROR__:") {
+            script_error = Some(value.to_string());
+        }
+        if let Some(value) = line.strip_prefix("__RESULT__:") {
+            result_payload = Some(value.to_string());
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Attente download Hypeddit impossible: {error}"))?;
+
+    if !status.success() {
+        if let Some(script_error) = script_error {
+            return Err(format!("Download Hypeddit en erreur: {script_error}"));
+        }
+        return Err("Download Hypeddit en erreur".to_string());
+    }
+
+    let json_payload = result_payload.ok_or_else(|| "Download Hypeddit sans résultat".to_string())?;
+    let mut result: HypedditScriptResult = serde_json::from_str(json_payload.as_str())
+        .map_err(|error| format!("Réponse download Hypeddit invalide: {error}"))?;
+
+    let rename_with_soundcloud_title = db::get_download_rename_with_soundcloud_title(&state.db_path)?;
+    if rename_with_soundcloud_title {
+        let downloaded_path = PathBuf::from(result.file_path.as_str());
+        let extension = downloaded_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| ".mp3".to_string());
+        let renamed_file_name = format!("{}{}", sanitize_file_stem(track_title.as_str()), extension);
+        let renamed_path = folder.join(renamed_file_name);
+
+        if renamed_path != downloaded_path {
+            if renamed_path.exists() {
+                if overwrite_existing {
+                    std::fs::remove_file(&renamed_path)
+                        .map_err(|error| format!("Impossible d'écraser le fichier renommé existant: {error}"))?;
+                } else {
+                    return Err(format!(
+                        "Un fichier existe déjà avec le nom SoundCloud cible: {}",
+                        renamed_path.display()
+                    ));
+                }
+            }
+
+            std::fs::rename(&downloaded_path, &renamed_path).or_else(|_| {
+                std::fs::copy(&downloaded_path, &renamed_path)?;
+                std::fs::remove_file(&downloaded_path)
+            })
+            .map_err(|error| format!("Impossible de renommer le fichier téléchargé: {error}"))?;
+
+            result.file_path = renamed_path.to_string_lossy().to_string();
+            result.file_name = renamed_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| result.file_name.clone());
+        }
+    }
+
+    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
+    if embed_cover {
+        if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            local_files::embed_cover_into_mp3(result.file_path.as_str(), artwork_url)?;
+        }
+    }
+
+    db::upsert_playlist_track_file_link_manual(
+        &state.db_path,
+        playlist_id,
+        track_permalink_url.trim(),
+        result.file_path.as_str(),
+    )?;
+
+    Ok(HypedditDownloadResult {
+        file_path: result.file_path,
+        file_name: result.file_name,
+        overwrote_existing: result.overwrote_existing,
+    })
+}
+
+#[tauri::command]
 fn reveal_local_file_in_explorer(file_path: String) -> Result<(), String> {
     let trimmed_path = file_path.trim();
     if trimmed_path.is_empty() {
@@ -703,6 +983,8 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         )?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
+        hypeddit_download_name: db::get_hypeddit_download_name(&state.db_path)?,
+        hypeddit_download_email: db::get_hypeddit_download_email(&state.db_path)?,
     })
 }
 
@@ -734,6 +1016,16 @@ fn set_hypeddit_download_comment(state: State<AppState>, comment: String) -> Res
     db::set_hypeddit_download_comment(&state.db_path, comment.as_str())
 }
 
+#[tauri::command]
+fn set_hypeddit_download_name(state: State<AppState>, name: String) -> Result<(), String> {
+    db::set_hypeddit_download_name(&state.db_path, name.as_str())
+}
+
+#[tauri::command]
+fn set_hypeddit_download_email(state: State<AppState>, email: String) -> Result<(), String> {
+    db::set_hypeddit_download_email(&state.db_path, email.as_str())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     config::load_dotenv();
@@ -763,6 +1055,7 @@ pub fn run() {
             sync_soundcloud_playlists,
             get_playlist_details,
             get_playlist_details_with_fallback,
+            get_playlist_track_local_file_info,
             get_playlist_local_folder_association,
             scan_playlist_local_files,
             dissociate_playlist_local_folder,
@@ -775,6 +1068,7 @@ pub fn run() {
             delete_local_spectrogram_preview,
             save_playlist_track_cutoff_analysis,
             analyze_playlist_local_audio_quality,
+            download_hypeddit_track_to_local_folder,
             reveal_local_file_in_explorer,
             get_debug_settings,
             set_soundcloud_fallback_headless,
@@ -784,7 +1078,9 @@ pub fn run() {
             set_download_embed_cover,
             set_download_rename_with_soundcloud_title,
             set_hypeddit_download_headless,
-            set_hypeddit_download_comment
+            set_hypeddit_download_comment,
+            set_hypeddit_download_name,
+            set_hypeddit_download_email
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

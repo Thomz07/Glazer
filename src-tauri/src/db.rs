@@ -616,6 +616,86 @@ pub fn set_hypeddit_download_comment(db_path: &Path, comment: &str) -> Result<()
     Ok(())
 }
 
+pub fn get_hypeddit_download_name(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_name'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| "Jojo".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_name(db_path: &Path, name: &str) -> Result<(), String> {
+    let normalized = if name.trim().is_empty() {
+        "Jojo".to_string()
+    } else {
+        name.trim().to_string()
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_name', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_email(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_email'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| "jouch@hippo.com".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_email(db_path: &Path, email: &str) -> Result<(), String> {
+    let normalized = if email.trim().is_empty() {
+        "jouch@hippo.com".to_string()
+    } else {
+        email.trim().to_string()
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_email', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 pub fn save_playlist_folder_link(db_path: &Path, playlist_id: i64, folder_path: &str) -> Result<(), String> {
     let connection = open_connection(db_path)?;
     let updated_at = std::time::SystemTime::now()

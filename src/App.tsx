@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { translations, type Language, type TranslationKey } from "./i18n";
@@ -96,6 +97,8 @@ type MiscSettings = {
   download_rename_with_soundcloud_title?: boolean;
   hypeddit_download_headless?: boolean;
   hypeddit_download_comment?: string;
+  hypeddit_download_name?: string;
+  hypeddit_download_email?: string;
 };
 
 type PlaylistLocalFolderAssociation = {
@@ -148,6 +151,16 @@ type MovePlaylistTrackResult = {
   moved_local_file_path?: string | null;
 };
 
+type HypedditDownloadResult = {
+  file_path: string;
+  file_name: string;
+  overwrote_existing: boolean;
+};
+
+type HypedditDownloadProgressPayload = {
+  phase: string;
+};
+
 const MAX_PLAYLIST_DETAILS_CACHE_SIZE = 4;
 
 function App() {
@@ -174,6 +187,8 @@ function App() {
   const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
+  const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
+  const [hypedditDownloadEmail, setHypedditDownloadEmail] = useState("jouch@hippo.com");
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
   const [panelCoverQuality, setPanelCoverQuality] = useState<CoverQuality>("t500x500");
   const [language, setLanguage] = useState<Language>("fr");
@@ -192,7 +207,8 @@ function App() {
   const [associatingLocalFile, setAssociatingLocalFile] = useState(false);
   const [dissociatingLocalFile, setDissociatingLocalFile] = useState(false);
   const [embeddingLocalCover, setEmbeddingLocalCover] = useState(false);
-  const [downloadingFromHypeddit] = useState(false);
+  const [downloadingFromHypeddit, setDownloadingFromHypeddit] = useState(false);
+  const [hypedditDownloadPhase, setHypedditDownloadPhase] = useState("");
   const [showHypedditDownloadMenu, setShowHypedditDownloadMenu] = useState(false);
   const [overwriteExistingHypedditDownload, setOverwriteExistingHypedditDownload] = useState(false);
   const [exportingSpectrogram, setExportingSpectrogram] = useState(false);
@@ -271,6 +287,23 @@ function App() {
     return translations[language][key];
   }
 
+  function getHypedditProgressLabel(phase: string) {
+    switch (phase) {
+      case "browser_ready":
+        return t("hypedditProgressBrowserReady");
+      case "gate_running":
+        return t("hypedditProgressGateRunning");
+      case "download_started":
+        return t("hypedditProgressDownloadStarted");
+      case "browser_cut":
+        return t("hypedditProgressBrowserCut");
+      case "file_saving":
+        return t("hypedditProgressSaving");
+      default:
+        return t("hypedditDownloadRunning");
+    }
+  }
+
   async function removeTemporaryPreview(path?: string | null) {
     if (!path) {
       return;
@@ -281,6 +314,26 @@ function App() {
     } catch {
     }
   }
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+
+    void (async () => {
+      unlisten = await listen<HypedditDownloadProgressPayload>("hypeddit-download-progress", (event) => {
+        const phase = event.payload?.phase?.trim();
+        if (!phase) {
+          return;
+        }
+        setHypedditDownloadPhase(phase);
+      });
+    })();
+
+    return () => {
+      if (unlisten) {
+        void unlisten();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const storedTheme = localStorage.getItem("glazer_theme") as ThemeMode | null;
@@ -593,6 +646,8 @@ function App() {
       setDownloadRenameWithSoundcloudTitle(Boolean(settings.download_rename_with_soundcloud_title));
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
       setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
+      setHypedditDownloadName(settings.hypeddit_download_name?.trim() || "Jojo");
+      setHypedditDownloadEmail(settings.hypeddit_download_email?.trim() || "jouch@hippo.com");
     } catch (error) {
       setStatus(`${t("statusMiscSettingsError")}: ${String(error)}`);
     }
@@ -633,6 +688,28 @@ function App() {
     try {
       await invoke("set_hypeddit_download_comment", { comment: normalized });
       setHypedditDownloadComment(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadName(name: string) {
+    const normalized = name.trim() || "Jojo";
+    try {
+      await invoke("set_hypeddit_download_name", { name: normalized });
+      setHypedditDownloadName(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadEmail(email: string) {
+    const normalized = email.trim() || "jouch@hippo.com";
+    try {
+      await invoke("set_hypeddit_download_email", { email: normalized });
+      setHypedditDownloadEmail(normalized);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -962,6 +1039,14 @@ function App() {
           local_file: null,
         };
       });
+
+      const previousPreviewPath = spectrogramPreviewTempPathRef.current;
+      spectrogramPreviewTempPathRef.current = null;
+      setSpectrogramPreview(null);
+      setManualCutoffInputHz("");
+      setLoadingSpectrogramPreview(false);
+      await removeTemporaryPreview(previousPreviewPath);
+
       setStatus(t("localDissociateDone"));
     } catch (error) {
       setStatus(`${t("localDissociateError")}: ${String(error)}`);
@@ -1089,9 +1174,97 @@ function App() {
   }
 
   async function downloadSelectedTrackFromHypeddit() {
-    setShowHypedditDownloadMenu(false);
-    setOverwriteExistingHypedditDownload(false);
-    setStatus("Hypeddit download temporarily disabled.");
+    if (!selectedPlaylistDetails || !selectedTrackInfo) {
+      return;
+    }
+
+    if (!selectedTrackInfo.associated_url || getAssociatedSource(selectedTrackInfo.associated_url) !== "hypeddit") {
+      setStatus(t("hypedditDownloadMissingLink"));
+      return;
+    }
+
+    if (!selectedTrackInfo.permalink_url) {
+      setStatus(t("localAssociateTrackMissingUrl"));
+      return;
+    }
+
+    if (!hasAvailableLocalFolder) {
+      setStatus(t("hypedditDownloadMissingFolder"));
+      return;
+    }
+
+    try {
+      setDownloadingFromHypeddit(true);
+      setHypedditDownloadPhase("");
+      const result = await invoke<HypedditDownloadResult>("download_hypeddit_track_to_local_folder", {
+        playlistId: selectedPlaylistDetails.id,
+        trackPermalinkUrl: selectedTrackInfo.permalink_url,
+        trackTitle: selectedTrackInfo.title,
+        hypedditUrl: selectedTrackInfo.associated_url,
+        artworkUrl: resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url ?? null,
+        overwriteExisting: overwriteExistingHypedditDownload,
+        existingFilePath: selectedTrackInfo.local_file?.file_path ?? null,
+      });
+
+      const downloadedLocalFile: LocalAudioFileInfo = {
+        file_path: result.file_path,
+        file_name: result.file_name,
+        matched_soundcloud_url: selectedTrackInfo.permalink_url,
+      };
+
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 500);
+      });
+
+      const hydratedLocalFile = await invoke<LocalAudioFileInfo | null>("get_playlist_track_local_file_info", {
+        playlistId: selectedPlaylistDetails.id,
+        trackPermalinkUrl: selectedTrackInfo.permalink_url,
+      });
+
+      const localFileForUi = hydratedLocalFile ?? downloadedLocalFile;
+
+      updateSelectedPlaylistDetailsWithCache((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          tracks: current.tracks.map((track) =>
+            track.id === selectedTrackInfo.id
+              ? {
+                  ...track,
+                  local_file: localFileForUi,
+                }
+              : track,
+          ),
+        };
+      });
+
+      setSelectedTrackInfo((current) => {
+        if (!current || current.id !== selectedTrackInfo.id) {
+          return current;
+        }
+
+        return {
+          ...current,
+          local_file: localFileForUi,
+        };
+      });
+
+      setShowHypedditDownloadMenu(false);
+      setOverwriteExistingHypedditDownload(false);
+      setStatus(
+        result.overwrote_existing
+          ? `${t("hypedditDownloadDoneOverwrite")}: ${result.file_path}`
+          : `${t("hypedditDownloadDone")}: ${result.file_path}`,
+      );
+    } catch (error) {
+      setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
+    } finally {
+      setDownloadingFromHypeddit(false);
+      setHypedditDownloadPhase("");
+    }
   }
 
   async function refreshSelectedPlaylistDetails() {
@@ -1989,6 +2162,7 @@ function App() {
                           >
                             {t("globalAudioAnalysisCancel")}
                           </button>
+                          {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
                         </div>
                       ) : null}
 
@@ -2242,6 +2416,42 @@ function App() {
                 if (event.key === "Enter") {
                   event.preventDefault();
                   void saveHypedditDownloadComment(hypedditDownloadComment);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadHypedditNameLabel")}</span>
+            <input
+              type="text"
+              value={hypedditDownloadName}
+              placeholder={t("downloadHypedditNamePlaceholder")}
+              onChange={(event) => setHypedditDownloadName(event.currentTarget.value)}
+              onBlur={() => { void saveHypedditDownloadName(hypedditDownloadName); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveHypedditDownloadName(hypedditDownloadName);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadHypedditEmailLabel")}</span>
+            <input
+              type="email"
+              value={hypedditDownloadEmail}
+              placeholder={t("downloadHypedditEmailPlaceholder")}
+              onChange={(event) => setHypedditDownloadEmail(event.currentTarget.value)}
+              onBlur={() => { void saveHypedditDownloadEmail(hypedditDownloadEmail); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveHypedditDownloadEmail(hypedditDownloadEmail);
                   event.currentTarget.blur();
                 }
               }}
