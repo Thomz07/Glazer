@@ -7,7 +7,6 @@ pub struct SoundCloudSecrets {
 #[derive(Debug, Clone)]
 pub struct SpotifySecrets {
     pub client_id: String,
-    pub client_secret: String,
 }
 
 pub const SOUNDCLOUD_REDIRECT_URI: &str = "http://127.0.0.1:4567/callback";
@@ -39,20 +38,12 @@ pub fn load_soundcloud_secrets() -> Result<SoundCloudSecrets, String> {
 pub fn load_spotify_secrets() -> Result<SpotifySecrets, String> {
     let client_id = load_secret_value("SPOTIFY_CLIENT_ID")
         .ok_or_else(|| "SPOTIFY_CLIENT_ID manquant (env runtime ou secret embarqué au build)".to_string())?;
-    let client_secret = load_secret_value("SPOTIFY_CLIENT_SECRET")
-        .ok_or_else(|| "SPOTIFY_CLIENT_SECRET manquant (env runtime ou secret embarqué au build)".to_string())?;
 
     if client_id.trim().is_empty() {
         return Err("SPOTIFY_CLIENT_ID est vide".to_string());
     }
-    if client_secret.trim().is_empty() {
-        return Err("SPOTIFY_CLIENT_SECRET est vide".to_string());
-    }
 
-    Ok(SpotifySecrets {
-        client_id,
-        client_secret,
-    })
+    Ok(SpotifySecrets { client_id })
 }
 
 fn load_secret_value(key: &str) -> Option<String> {

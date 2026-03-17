@@ -2,9 +2,12 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use rand::distributions::{Alphanumeric, DistString};
 use reqwest::blocking::Client;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use url::form_urlencoded;
 
 use crate::config::{SpotifySecrets, SPOTIFY_REDIRECT_URI};
@@ -22,6 +25,7 @@ struct TokenResponse {
 pub struct AuthStart {
     pub state: String,
     pub auth_url: String,
+    pub code_verifier: String,
 }
 
 pub struct AuthCompletion {
@@ -32,21 +36,42 @@ pub struct AuthCompletion {
 
 pub fn create_auth_start(secrets: &SpotifySecrets) -> AuthStart {
     let state = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
+    let code_verifier = generate_pkce_code_verifier();
+    let code_challenge = create_code_challenge(&code_verifier);
     let client_id = urlencoding::encode(&secrets.client_id);
     let redirect_uri = urlencoding::encode(SPOTIFY_REDIRECT_URI);
     let state_encoded = urlencoding::encode(&state);
     let scope = urlencoding::encode("user-read-email user-read-private");
+    let code_challenge_encoded = urlencoding::encode(&code_challenge);
 
     let auth_url = format!(
-        "{AUTH_BASE_URL}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state_encoded}"
+        "{AUTH_BASE_URL}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state_encoded}&code_challenge_method=S256&code_challenge={code_challenge_encoded}"
     );
 
-    AuthStart { state, auth_url }
+    AuthStart {
+        state,
+        auth_url,
+        code_verifier,
+    }
 }
 
-pub fn complete_auth(secrets: &SpotifySecrets, expected_state: &str) -> Result<AuthCompletion, String> {
+pub fn complete_auth(
+    secrets: &SpotifySecrets,
+    expected_state: &str,
+    code_verifier: &str,
+) -> Result<AuthCompletion, String> {
     let code = wait_for_callback_code(expected_state)?;
-    exchange_code_for_token(secrets, &code)
+    exchange_code_for_token(secrets, &code, code_verifier)
+}
+
+fn generate_pkce_code_verifier() -> String {
+    // RFC 7636: verifier length must be between 43 and 128 chars.
+    Alphanumeric.sample_string(&mut rand::thread_rng(), 64)
+}
+
+fn create_code_challenge(code_verifier: &str) -> String {
+    let digest = Sha256::digest(code_verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
 }
 
 fn wait_for_callback_code(expected_state: &str) -> Result<String, String> {
@@ -126,7 +151,15 @@ fn respond_html(stream: &mut impl Write, status_code: u16, message: &str) {
     let _ = stream.flush();
 }
 
-fn exchange_code_for_token(secrets: &SpotifySecrets, code: &str) -> Result<AuthCompletion, String> {
+fn exchange_code_for_token(
+    secrets: &SpotifySecrets,
+    code: &str,
+    code_verifier: &str,
+) -> Result<AuthCompletion, String> {
+    if code_verifier.trim().len() < 43 {
+        return Err("Code verifier PKCE invalide".to_string());
+    }
+
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -137,9 +170,9 @@ fn exchange_code_for_token(secrets: &SpotifySecrets, code: &str) -> Result<AuthC
         .form(&[
             ("grant_type", "authorization_code"),
             ("client_id", secrets.client_id.as_str()),
-            ("client_secret", secrets.client_secret.as_str()),
             ("redirect_uri", SPOTIFY_REDIRECT_URI),
             ("code", code),
+            ("code_verifier", code_verifier),
         ])
         .send()
         .map_err(|error| format!("Échec échange token Spotify: {error}"))?;

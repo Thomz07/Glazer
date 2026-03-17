@@ -82,6 +82,7 @@ type SpotifyConfigStatus = {
 type AuthStartPayload = {
   state: string;
   auth_url: string;
+  code_verifier?: string | null;
 };
 
 type DebugSettings = {
@@ -783,11 +784,17 @@ function App() {
 
     try {
       const start = await invoke<AuthStartPayload>("start_spotify_auth");
+      const codeVerifier = start.code_verifier?.trim();
+      if (!codeVerifier) {
+        throw new Error("PKCE verifier manquant");
+      }
+
       await openUrl(start.auth_url);
       setStatus(t("statusAuthWindowSpotify"));
 
       await invoke("complete_spotify_auth", {
         expectedState: start.state,
+        codeVerifier,
       });
 
       await loadSpotifyStatus();

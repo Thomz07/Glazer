@@ -34,6 +34,7 @@ regex = "1"
 audiotags = "0.5"
 lofty = "0.21"
 base64 = "0.22"
+sha2 = "0.10"
 mp3-duration = "0.1"
 symphonia = { version = "0.5", features = ["aac", "mp3", "isomp4", "flac", "ogg", "vorbis", "wav", "pcm"] }
 rustfft = "6"

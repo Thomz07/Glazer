@@ -50,8 +50,9 @@ cp src-tauri/.env.example src-tauri/.env
 SOUNDCLOUD_CLIENT_ID=...
 SOUNDCLOUD_CLIENT_SECRET=...
 SPOTIFY_CLIENT_ID=...
-SPOTIFY_CLIENT_SECRET=...
 ```
+
+Note: Spotify utilise PKCE, donc `SPOTIFY_CLIENT_SECRET` n'est pas requis.
 
 3. Redirect URIs (fixes):
 
@@ -63,8 +64,25 @@ SPOTIFY_CLIENT_SECRET=...
 ## Prérequis
 
 - Node.js 20+
-- Rust (`rustup`)
-- Prérequis Tauri: https://tauri.app/start/prerequisites/
+- npm
+- Rust (`rustup`, `cargo`)
+- Dépendances système Tauri (Windows/macOS/Linux): https://tauri.app/start/prerequisites/
+
+### Dépendances du projet
+
+Frontend (npm):
+- `react`, `react-dom`
+- `vite`, `@vitejs/plugin-react`, `typescript`
+- `@tauri-apps/api`, `@tauri-apps/cli`
+- `@tauri-apps/plugin-dialog`, `@tauri-apps/plugin-opener`
+- `playwright` (tests e2e)
+
+Backend (Rust):
+- `tauri` v2, `tauri-build`
+- `rusqlite` (SQLite embarqué), `serde`, `serde_json`
+- `reqwest` (HTTP), `dotenvy`, `url`, `urlencoding`
+- Audio: `symphonia`, `rustfft`, `image`, `audiotags`, `lofty`, `id3`, `mp3-duration`
+- Divers: `rand`, `regex`, `walkdir`, `base64`
 
 ## Lancer en dev
 
@@ -73,6 +91,11 @@ npm install
 npx playwright install chromium
 npm run tauri dev
 ```
+
+Si la fenêtre ne s'ouvre pas:
+- Vérifier les prérequis Tauri et la toolchain Rust.
+- Lancer d'abord le frontend: `npm run dev` puis `npm run tauri dev`.
+- S'assurer que `http://localhost:1420` est accessible.
 
 ## Build
 

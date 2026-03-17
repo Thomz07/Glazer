@@ -184,6 +184,7 @@ fn get_spotify_connection_status(state: State<AppState>) -> Result<SpotifyConfig
 struct AuthStartPayload {
     state: String,
     auth_url: String,
+    code_verifier: Option<String>,
 }
 
 #[tauri::command]
@@ -193,6 +194,7 @@ fn start_soundcloud_auth() -> Result<AuthStartPayload, String> {
     Ok(AuthStartPayload {
         state: start.state,
         auth_url: start.auth_url,
+        code_verifier: None,
     })
 }
 
@@ -203,6 +205,7 @@ fn start_spotify_auth() -> Result<AuthStartPayload, String> {
     Ok(AuthStartPayload {
         state: start.state,
         auth_url: start.auth_url,
+        code_verifier: Some(start.code_verifier),
     })
 }
 
@@ -229,9 +232,13 @@ fn complete_soundcloud_auth(
 }
 
 #[tauri::command]
-fn complete_spotify_auth(state: State<AppState>, expected_state: String) -> Result<(), String> {
+fn complete_spotify_auth(
+    state: State<AppState>,
+    expected_state: String,
+    code_verifier: String,
+) -> Result<(), String> {
     let secrets = config::load_spotify_secrets()?;
-    let completion = spotify::complete_auth(&secrets, expected_state.trim())?;
+    let completion = spotify::complete_auth(&secrets, expected_state.trim(), code_verifier.trim())?;
 
     db::save_spotify_tokens(
         &state.db_path,
