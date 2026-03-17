@@ -726,7 +726,10 @@ fn download_hypeddit_track_to_local_folder(
     overwrite_existing: bool,
     existing_file_path: Option<String>,
 ) -> Result<HypedditDownloadResult, String> {
-    if !db::has_spotify_access_token(&state.db_path)? {
+    let has_spotify_connection = db::has_spotify_access_token(&state.db_path)?;
+    let has_soundcloud_connection = db::has_access_token(&state.db_path)?;
+
+    if !has_spotify_connection {
         return Err(
             "Connexion Spotify requise pour automatiser les gates Hypeddit. Connecte Spotify puis recommence."
                 .to_string(),
@@ -790,6 +793,8 @@ fn download_hypeddit_track_to_local_folder(
         .arg(hypeddit_comment)
         .arg(hypeddit_name)
         .arg(hypeddit_email)
+        .arg(if has_soundcloud_connection { "true" } else { "false" })
+        .arg(if has_spotify_connection { "true" } else { "false" })
         .arg(browser_profile_dir.to_string_lossy().to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

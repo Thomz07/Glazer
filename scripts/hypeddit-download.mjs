@@ -11,7 +11,9 @@ const headlessArg = process.argv[6] ?? "true";
 const commentArg = process.argv[7] ?? "Nice!";
 const nameArg = process.argv[8] ?? "Jojo";
 const emailArg = process.argv[9] ?? "jouch@hippo.com";
-const profileDirArg = process.argv[10] ?? "";
+const useAppSoundCloudArg = process.argv[10] ?? "false";
+const useAppSpotifyArg = process.argv[11] ?? "false";
+const profileDirArg = process.argv[12] ?? "";
 
 if (!hypedditUrl) {
   console.error("Missing Hypeddit URL");
@@ -29,6 +31,8 @@ const headless = headlessArg === "true";
 const comment = commentArg.trim() || "Nice!";
 const userName = nameArg.trim() || "Jojo";
 const userEmail = emailArg.trim() || "jouch@hippo.com";
+const useAppSoundCloudConnection = useAppSoundCloudArg === "true";
+const useAppSpotifyConnection = useAppSpotifyArg === "true";
 const profileDir = profileDirArg.trim() || path.join(outputFolder, ".playwright-hypeddit-profile");
 
 function purgeRestoredTabsState(profileDirectory) {
@@ -229,12 +233,21 @@ async function ensureSoundCloudSession(context, page, isHeadless) {
   return false;
 }
 
-async function injectBypassScript(page, injectedComment, injectedName, injectedEmail) {
-  await page.evaluate(({ commentText, nameText, emailText }) => {
+async function injectBypassScript(
+  page,
+  injectedComment,
+  injectedName,
+  injectedEmail,
+  injectedUseAppSoundCloudConnection,
+  injectedUseAppSpotifyConnection,
+) {
+  await page.evaluate(({ commentText, nameText, emailText, useAppSoundCloud, useAppSpotify }) => {
     window.hypedditSettings = {
       email: emailText,
       name: nameText,
       comment: commentText,
+      use_app_soundcloud_connection: useAppSoundCloud,
+      use_app_spotify_connection: useAppSpotify,
       auto_close: true,
       auto_close_timeout_in_ms: 5000,
     };
@@ -255,6 +268,7 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
 
     window.handleSoundCloud = function () {
       const comment = window.hypedditSettings.comment;
+      const useAppSoundCloud = window.hypedditSettings.use_app_soundcloud_connection;
 
       if (document.getElementById("sc_comment_text") !== null) {
         document
@@ -263,7 +277,11 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
       }
 
       if (document.getElementById("step_sc") !== null) {
-        document.getElementById("step_sc").querySelector("a").click();
+        if (useAppSoundCloud && document.getElementById("skipper_sc_next") !== null) {
+          document.getElementById("skipper_sc_next").click();
+        } else {
+          document.getElementById("step_sc").querySelector("a").click();
+        }
       }
     };
 
@@ -276,7 +294,27 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
     };
 
     window.handleSpotify = function () {
-      document.getElementById("step_sp").querySelector("a").click();
+      const useAppSpotify = window.hypedditSettings.use_app_spotify_connection;
+      const spotifySkipperClassic = document.getElementById("skipper_sp_next");
+      const spotifySkipperSidebar = document.querySelector('#skipper[data-step="sp"]');
+
+      if (useAppSpotify && spotifySkipperClassic !== null) {
+        spotifySkipperClassic.click();
+        return;
+      }
+
+      if (useAppSpotify && spotifySkipperSidebar !== null) {
+        spotifySkipperSidebar.click();
+        return;
+      }
+
+      const spotifyStep = document.getElementById("step_sp");
+      if (spotifyStep !== null) {
+        const spotifyLink = spotifyStep.querySelector("a");
+        if (spotifyLink !== null) {
+          spotifyLink.click();
+        }
+      }
     };
 
     window.handleDownload = function () {
@@ -447,6 +485,8 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
     commentText: injectedComment,
     nameText: injectedName,
     emailText: injectedEmail,
+    useAppSoundCloud: injectedUseAppSoundCloudConnection,
+    useAppSpotify: injectedUseAppSpotifyConnection,
   });
 }
 
@@ -477,7 +517,9 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
   });
 
-  const soundCloudReady = await ensureSoundCloudSession(context, page, headless);
+  const soundCloudReady = useAppSoundCloudConnection
+    ? true
+    : await ensureSoundCloudSession(context, page, headless);
   if (!soundCloudReady) {
     process.stdout.write("__ERROR__:Aucune session SoundCloud mémorisée dans le profil Playwright. Désactive le mode headless et connecte-toi une première fois, puis relance.\n");
     await context.close();
@@ -495,7 +537,14 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
     await humanClick(startButton, page);
   }
 
-  await injectBypassScript(page, comment, userName, userEmail);
+  await injectBypassScript(
+    page,
+    comment,
+    userName,
+    userEmail,
+    useAppSoundCloudConnection,
+    useAppSpotifyConnection,
+  );
 
   let download;
   try {
@@ -508,7 +557,26 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
   }
 
   const suggested = sanitizeFileName(download.suggestedFilename() || "track.mp3");
-  const targetPath = preferredFilePath || path.join(outputFolder, suggested);
+  let targetPath = preferredFilePath || path.join(outputFolder, suggested);
+  let removedPreviousPreferredFile = false;
+
+  if (preferredFilePath && overwriteExisting) {
+    const preferredDirectory = path.dirname(preferredFilePath);
+    const preferredStem = path.basename(preferredFilePath, path.extname(preferredFilePath));
+    const downloadedExtension = path.extname(suggested);
+
+    if (downloadedExtension) {
+      const extensionAwareTargetPath = path.join(preferredDirectory, `${preferredStem}${downloadedExtension}`);
+
+      if (extensionAwareTargetPath !== preferredFilePath && fs.existsSync(preferredFilePath)) {
+        fs.rmSync(preferredFilePath, { force: true });
+        removedPreviousPreferredFile = true;
+      }
+
+      targetPath = extensionAwareTargetPath;
+    }
+  }
+
   const existedBeforeSave = fs.existsSync(targetPath);
 
   if (!overwriteExisting && existedBeforeSave) {
@@ -534,7 +602,7 @@ async function injectBypassScript(page, injectedComment, injectedName, injectedE
   process.stdout.write(`__RESULT__:${JSON.stringify({
     file_path: targetPath,
     file_name: path.basename(targetPath),
-    overwrote_existing: overwriteExisting && existedBeforeSave,
+    overwrote_existing: overwriteExisting && (existedBeforeSave || removedPreviousPreferredFile),
   })}\n`);
 
   await context.close();
