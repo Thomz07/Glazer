@@ -62,12 +62,14 @@ export type PlaylistDetails = {
 export type SoundCloudConfigStatus = {
   configured: boolean;
   connected: boolean;
+  connected_account_name?: string | null;
   redirect_uri: string;
 };
 
 export type SpotifyConfigStatus = {
   configured: boolean;
   connected: boolean;
+  connected_account_name?: string | null;
   redirect_uri: string;
 };
 
@@ -88,6 +90,7 @@ export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
   download_embed_cover?: boolean;
   download_rename_with_soundcloud_title?: boolean;
+  analysis_auto_apply_frequency_max?: boolean;
   hypeddit_download_headless?: boolean;
   hypeddit_download_comment?: string;
   hypeddit_download_name?: string;

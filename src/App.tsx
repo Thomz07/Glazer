@@ -96,6 +96,7 @@ function App() {
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
   const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
@@ -173,6 +174,72 @@ function App() {
       await invoke("delete_local_spectrogram_preview", { tempPath: path });
     } catch {
     }
+  }
+
+  function normalizeSoundCloudPermalink(url?: string | null) {
+    const value = url?.trim();
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const parsed = new URL(value);
+      const host = parsed.hostname.toLowerCase();
+      if (!host.includes("soundcloud.com")) {
+        return null;
+      }
+      parsed.search = "";
+      parsed.hash = "";
+      let normalized = parsed.toString();
+      if (normalized.endsWith("/")) {
+        normalized = normalized.slice(0, -1);
+      }
+      return normalized;
+    } catch {
+      return null;
+    }
+  }
+
+  function mergeLocalFilesIntoDetails(previous: PlaylistDetails | null | undefined, next: PlaylistDetails) {
+    if (!previous) {
+      return next;
+    }
+
+    const byTrackId = new Map<number, LocalAudioFileInfo>();
+    const byPermalink = new Map<string, LocalAudioFileInfo>();
+
+    for (const track of previous.tracks) {
+      if (!track.local_file) {
+        continue;
+      }
+      byTrackId.set(track.id, track.local_file);
+      const normalized = normalizeSoundCloudPermalink(track.permalink_url);
+      if (normalized) {
+        byPermalink.set(normalized, track.local_file);
+      }
+    }
+
+    return {
+      ...next,
+      tracks: next.tracks.map((track) => {
+        if (track.local_file) {
+          return track;
+        }
+
+        const fromId = byTrackId.get(track.id);
+        if (fromId) {
+          return { ...track, local_file: fromId };
+        }
+
+        const normalized = normalizeSoundCloudPermalink(track.permalink_url);
+        const fromPermalink = normalized ? byPermalink.get(normalized) : undefined;
+        if (fromPermalink) {
+          return { ...track, local_file: fromPermalink };
+        }
+
+        return track;
+      }),
+    };
   }
 
   useEffect(() => {
@@ -367,11 +434,13 @@ function App() {
       setSpectrogramPreview(result);
 
       if (result.estimated_cutoff_hz && result.estimated_cutoff_hz > 0) {
-        try {
-          await persistCutoffAnalysis(result.estimated_cutoff_hz);
-        } catch (persistError) {
-          // Keep preview visible even if analysis persistence fails.
-          setStatus(`${t("localSpectrogramExportError")}: ${String(persistError)}`);
+        if (analysisAutoApplyFrequencyMax) {
+          try {
+            await persistCutoffAnalysis(result.estimated_cutoff_hz);
+          } catch (persistError) {
+            // Keep preview visible even if analysis persistence fails.
+            setStatus(`${t("localSpectrogramExportError")}: ${String(persistError)}`);
+          }
         }
         setManualCutoffInputHz(String(result.estimated_cutoff_hz));
       }
@@ -491,6 +560,7 @@ function App() {
       setPlaylistCoverMode(settings.playlist_cover_mode ?? "first");
       setDownloadEmbedCover(Boolean(settings.download_embed_cover));
       setDownloadRenameWithSoundcloudTitle(Boolean(settings.download_rename_with_soundcloud_title));
+      setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
       setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
       setHypedditDownloadName(settings.hypeddit_download_name?.trim() || "Jojo");
@@ -514,6 +584,16 @@ function App() {
     try {
       await invoke("set_download_rename_with_soundcloud_title", { enabled });
       setDownloadRenameWithSoundcloudTitle(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveAnalysisAutoApplyFrequencyMax(enabled: boolean) {
+    try {
+      await invoke("set_analysis_auto_apply_frequency_max", { enabled });
+      setAnalysisAutoApplyFrequencyMax(enabled);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -624,6 +704,30 @@ function App() {
     }
   }
 
+  async function disconnectSoundCloud() {
+    setStatus("");
+    setAsyncState("connecting", true);
+
+    try {
+      await invoke("disconnect_soundcloud");
+      await loadConfigStatus();
+      setStatus(t("statusAuthSoundcloudDisconnected"));
+    } catch (error) {
+      setStatus(`${t("statusAuthError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("connecting", false);
+    }
+  }
+
+  async function toggleSoundCloudConnection() {
+    if (configStatus?.connected) {
+      await disconnectSoundCloud();
+      return;
+    }
+
+    await connectSoundCloud();
+  }
+
   async function connectSpotify() {
     setStatus("");
     setAsyncState("connectingSpotify", true);
@@ -652,6 +756,30 @@ function App() {
     }
   }
 
+  async function disconnectSpotify() {
+    setStatus("");
+    setAsyncState("connectingSpotify", true);
+
+    try {
+      await invoke("disconnect_spotify");
+      await loadSpotifyStatus();
+      setStatus(t("statusAuthSpotifyDisconnected"));
+    } catch (error) {
+      setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("connectingSpotify", false);
+    }
+  }
+
+  async function toggleSpotifyConnection() {
+    if (spotifyStatus?.connected) {
+      await disconnectSpotify();
+      return;
+    }
+
+    await connectSpotify();
+  }
+
   async function openPlaylistDetails(playlistId: number) {
     setStatus("");
     const cached = playlistDetailsCacheRef.current.get(playlistId);
@@ -668,7 +796,8 @@ function App() {
         playlistId,
         headless: debugSettings.soundcloud_fallback_headless,
       });
-      setSelectedPlaylistDetailsWithCache(details);
+      const mergedDetails = mergeLocalFilesIntoDetails(selectedPlaylistDetails, details);
+      setSelectedPlaylistDetailsWithCache(mergedDetails);
       setSelectedTrackId(null);
       await loadPlaylistLocalFolderAssociation(playlistId);
     } catch (error) {
@@ -750,20 +879,20 @@ function App() {
         `${t("localScanDone")}: ${result.matched_files}/${result.scanned_files} ${t("localScanMatched")}`,
       );
 
-      const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
+      const details = await invoke<PlaylistDetails>("get_playlist_details", {
         playlistId: selectedPlaylistDetails.id,
-        headless: debugSettings.soundcloud_fallback_headless,
       });
       const linkedTracks = details.tracks.filter((track) => Boolean(track.local_file)).length;
       setStatus(
         `${t("localScanDone")}: ${linkedTracks}/${details.track_count} ${t("localTracksLinked")} (${result.matched_files}/${result.scanned_files} ${t("localScanMatched")})`,
       );
-      setSelectedPlaylistDetailsWithCache(details);
+      const mergedDetails = mergeLocalFilesIntoDetails(selectedPlaylistDetails, details);
+      setSelectedPlaylistDetailsWithCache(mergedDetails);
       setSelectedTrackId((currentId) => {
         if (currentId === null) {
           return null;
         }
-        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+        return mergedDetails.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
     } catch (error) {
       setStatus(`${t("localScanError")}: ${String(error)}`);
@@ -817,6 +946,12 @@ function App() {
         directory: false,
         multiple: false,
         defaultPath: playlistFolderPath.trim() || undefined,
+        filters: [
+          {
+            name: "Audio",
+            extensions: ["mp3", "wav", "aif", "aiff", "flac", "m4a", "ogg", "aac"],
+          },
+        ],
       });
 
       if (!selected || Array.isArray(selected)) {
@@ -924,7 +1059,8 @@ function App() {
         playlistId: selectedPlaylistDetails.id,
         headless: debugSettings.soundcloud_fallback_headless,
       });
-      setSelectedPlaylistDetailsWithCache(refreshedSourceDetails);
+      const mergedSourceDetails = mergeLocalFilesIntoDetails(selectedPlaylistDetails, refreshedSourceDetails);
+      setSelectedPlaylistDetailsWithCache(mergedSourceDetails);
 
       // Refresh destination playlist cache too so the moved track appears immediately when opened.
       try {
@@ -932,8 +1068,10 @@ function App() {
           playlistId: targetPlaylistId,
           headless: debugSettings.soundcloud_fallback_headless,
         });
+        const previousTargetDetails = playlistDetailsCacheRef.current.get(targetPlaylistId)?.details;
+        const mergedTargetDetails = mergeLocalFilesIntoDetails(previousTargetDetails, refreshedTargetDetails);
         playlistDetailsCacheRef.current.set(targetPlaylistId, {
-          details: refreshedTargetDetails,
+          details: mergedTargetDetails,
           cached_at_ms: Date.now(),
         });
       } catch {
@@ -1133,12 +1271,13 @@ function App() {
         headless: debugSettings.soundcloud_fallback_headless,
       });
 
-      setSelectedPlaylistDetailsWithCache(details);
+      const mergedDetails = mergeLocalFilesIntoDetails(selectedPlaylistDetails, details);
+      setSelectedPlaylistDetailsWithCache(mergedDetails);
       setSelectedTrackId((currentId) => {
         if (currentId === null) {
           return null;
         }
-        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+        return mergedDetails.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
 
       await loadPlaylistLocalFolderAssociation(details.id);
@@ -1522,7 +1661,8 @@ function App() {
   const analyzableTracksCount = selectedPlaylistDetails
     ? selectedPlaylistDetails.tracks.filter((track) => Boolean(track.local_file)).length
     : 0;
-  const estimatedGlobalAnalysisSeconds = analyzableTracksCount * 7;
+  const estimatedGlobalAnalysisMinSeconds = analyzableTracksCount * 3;
+  const estimatedGlobalAnalysisMaxSeconds = analyzableTracksCount * 7;
   const isAnyLoading = Object.values(asyncState).some(Boolean);
   const headerSpinnerFrame = useUnicodeSpinner(isAnyLoading, "waverows");
 
@@ -1592,7 +1732,8 @@ function App() {
                 overwriteExistingGlobalAnalysis={overwriteExistingGlobalAnalysis}
                 hasAvailableLocalFolder={hasAvailableLocalFolder}
                 analyzableTracksCount={analyzableTracksCount}
-                estimatedGlobalAnalysisSeconds={estimatedGlobalAnalysisSeconds}
+                estimatedGlobalAnalysisMinSeconds={estimatedGlobalAnalysisMinSeconds}
+                estimatedGlobalAnalysisMaxSeconds={estimatedGlobalAnalysisMaxSeconds}
                 activeFilterCount={activeFilterCount}
                 hasActiveTrackFilters={hasActiveTrackFilters}
                 isFilterMenuOpen={isFilterMenuOpen}
@@ -1761,6 +1902,7 @@ function App() {
             playlistCoverMode={playlistCoverMode}
             savingPlaylistCoverMode={asyncState.savingPlaylistCoverMode}
             spectrogramAnalysisScope={spectrogramAnalysisScope}
+            analysisAutoApplyFrequencyMax={analysisAutoApplyFrequencyMax}
             downloadEmbedCover={downloadEmbedCover}
             downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
             hypedditDownloadHeadless={hypedditDownloadHeadless}
@@ -1784,6 +1926,11 @@ function App() {
               });
             }}
             onSpectrogramAnalysisScopeChange={onSpectrogramAnalysisScopeChange}
+            onSaveAnalysisAutoApplyFrequencyMax={(enabled) => {
+              saveAnalysisAutoApplyFrequencyMax(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveDownloadEmbedCover={(enabled) => {
               saveDownloadEmbedCover(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -1814,13 +1961,13 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
-            onConnectSoundCloud={() => {
-              connectSoundCloud().catch((error) => {
+            onToggleSoundCloud={() => {
+              toggleSoundCloudConnection().catch((error) => {
                 setStatus(`${t("statusAuthError")}: ${String(error)}`);
               });
             }}
-            onConnectSpotify={() => {
-              connectSpotify().catch((error) => {
+            onToggleSpotify={() => {
+              toggleSpotifyConnection().catch((error) => {
                 setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
               });
             }}

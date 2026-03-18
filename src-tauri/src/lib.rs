@@ -21,6 +21,7 @@ struct AppState {
 struct SoundCloudConfigStatus {
     configured: bool,
     connected: bool,
+    connected_account_name: Option<String>,
     redirect_uri: String,
 }
 
@@ -28,6 +29,7 @@ struct SoundCloudConfigStatus {
 struct SpotifyConfigStatus {
     configured: bool,
     connected: bool,
+    connected_account_name: Option<String>,
     redirect_uri: String,
 }
 
@@ -42,6 +44,7 @@ struct MiscSettings {
     playlist_cover_mode: String,
     download_embed_cover: bool,
     download_rename_with_soundcloud_title: bool,
+    analysis_auto_apply_frequency_max: bool,
     hypeddit_download_headless: bool,
     hypeddit_download_comment: String,
     hypeddit_download_name: String,
@@ -159,11 +162,16 @@ fn sanitize_file_stem(input: &str) -> String {
 #[tauri::command]
 fn get_connection_status(state: State<AppState>) -> Result<SoundCloudConfigStatus, String> {
     let configured = config::load_soundcloud_secrets().is_ok();
-    let connected = db::has_access_token(&state.db_path)?;
+    let token = db::get_access_token(&state.db_path)?;
+    let connected = token.is_some();
+    let connected_account_name = token
+        .as_deref()
+        .and_then(|value| soundcloud::fetch_connected_account_name(value).ok().flatten());
 
     Ok(SoundCloudConfigStatus {
         configured,
         connected,
+        connected_account_name,
         redirect_uri: config::SOUNDCLOUD_REDIRECT_URI.to_string(),
     })
 }
@@ -171,13 +179,28 @@ fn get_connection_status(state: State<AppState>) -> Result<SoundCloudConfigStatu
 #[tauri::command]
 fn get_spotify_connection_status(state: State<AppState>) -> Result<SpotifyConfigStatus, String> {
     let configured = config::load_spotify_secrets().is_ok();
-    let connected = db::has_spotify_access_token(&state.db_path)?;
+    let token = db::get_spotify_access_token(&state.db_path)?;
+    let connected = token.is_some();
+    let connected_account_name = token
+        .as_deref()
+        .and_then(|value| spotify::fetch_connected_account_name(value).ok().flatten());
 
     Ok(SpotifyConfigStatus {
         configured,
         connected,
+        connected_account_name,
         redirect_uri: config::SPOTIFY_REDIRECT_URI.to_string(),
     })
+}
+
+#[tauri::command]
+fn disconnect_soundcloud(state: State<AppState>) -> Result<(), String> {
+    db::clear_soundcloud_tokens(&state.db_path)
+}
+
+#[tauri::command]
+fn disconnect_spotify(state: State<AppState>) -> Result<(), String> {
+    db::clear_spotify_tokens(&state.db_path)
 }
 
 #[derive(Serialize)]
@@ -993,6 +1016,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         download_rename_with_soundcloud_title: db::get_download_rename_with_soundcloud_title(
             &state.db_path,
         )?,
+        analysis_auto_apply_frequency_max: db::get_analysis_auto_apply_frequency_max(&state.db_path)?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
         hypeddit_download_name: db::get_hypeddit_download_name(&state.db_path)?,
@@ -1016,6 +1040,11 @@ fn set_download_rename_with_soundcloud_title(
     enabled: bool,
 ) -> Result<(), String> {
     db::set_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_analysis_auto_apply_frequency_max(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_analysis_auto_apply_frequency_max(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -1059,6 +1088,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_connection_status,
             get_spotify_connection_status,
+            disconnect_soundcloud,
+            disconnect_spotify,
             start_soundcloud_auth,
             start_spotify_auth,
             complete_soundcloud_auth,
@@ -1089,6 +1120,7 @@ pub fn run() {
             set_playlist_cover_mode,
             set_download_embed_cover,
             set_download_rename_with_soundcloud_title,
+            set_analysis_auto_apply_frequency_max,
             set_hypeddit_download_headless,
             set_hypeddit_download_comment,
             set_hypeddit_download_name,

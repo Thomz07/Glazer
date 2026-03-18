@@ -17,6 +17,7 @@ use crate::models::{Playlist, PlaylistDetails, PlaylistTrack};
 const AUTH_BASE_URL: &str = "https://soundcloud.com/connect";
 const TOKEN_URL: &str = "https://api.soundcloud.com/oauth2/token";
 const PLAYLISTS_URL: &str = "https://api.soundcloud.com/me/playlists";
+const ME_URL: &str = "https://api.soundcloud.com/me";
 const PLAYLIST_URL_BASE: &str = "https://api.soundcloud.com/playlists";
 const RESOLVE_URL: &str = "https://api.soundcloud.com/resolve";
 
@@ -55,6 +56,14 @@ struct SoundCloudUser {
     username: Option<String>,
     #[serde(default)]
     avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SoundCloudMe {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    full_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -385,6 +394,42 @@ pub fn fetch_user_playlists(
             }
         })
         .collect())
+}
+
+pub fn fetch_connected_account_name(access_token: &str) -> Result<Option<String>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let response = client
+        .get(ME_URL)
+        .header("accept", "application/json; charset=utf-8")
+        .header("Authorization", format!("OAuth {access_token}"))
+        .send()
+        .map_err(|error| format!("Échec récupération profil SoundCloud: {error}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("API profil SoundCloud en erreur ({status}): {body}"));
+    }
+
+    let me: SoundCloudMe = response
+        .json()
+        .map_err(|error| format!("Réponse profil SoundCloud invalide: {error}"))?;
+
+    let username = me.username.unwrap_or_default().trim().to_string();
+    if !username.is_empty() {
+        return Ok(Some(username));
+    }
+
+    let full_name = me.full_name.unwrap_or_default().trim().to_string();
+    if !full_name.is_empty() {
+        return Ok(Some(full_name));
+    }
+
+    Ok(None)
 }
 
 fn parse_playlists_response(body: &str) -> Result<Vec<SoundCloudPlaylist>, String> {

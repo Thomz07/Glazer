@@ -14,12 +14,21 @@ use crate::config::{SpotifySecrets, SPOTIFY_REDIRECT_URI};
 
 const AUTH_BASE_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
+const ME_URL: &str = "https://api.spotify.com/v1/me";
 
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     expires_in: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SpotifyMe {
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 pub struct AuthStart {
@@ -200,4 +209,40 @@ fn exchange_code_for_token(
         refresh_token: payload.refresh_token,
         expires_at,
     })
+}
+
+pub fn fetch_connected_account_name(access_token: &str) -> Result<Option<String>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let response = client
+        .get(ME_URL)
+        .header("accept", "application/json")
+        .bearer_auth(access_token)
+        .send()
+        .map_err(|error| format!("Échec récupération profil Spotify: {error}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("API profil Spotify en erreur ({status}): {body}"));
+    }
+
+    let me: SpotifyMe = response
+        .json()
+        .map_err(|error| format!("Réponse profil Spotify invalide: {error}"))?;
+
+    let display_name = me.display_name.unwrap_or_default().trim().to_string();
+    if !display_name.is_empty() {
+        return Ok(Some(display_name));
+    }
+
+    let id = me.id.unwrap_or_default().trim().to_string();
+    if !id.is_empty() {
+        return Ok(Some(id));
+    }
+
+    Ok(None)
 }

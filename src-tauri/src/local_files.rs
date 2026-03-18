@@ -138,6 +138,14 @@ pub struct LocalMetadataSnapshot {
 
 const AUDIO_EXTENSIONS: [&str; 8] = ["mp3", "wav", "aif", "aiff", "flac", "m4a", "ogg", "aac"];
 
+pub fn is_supported_audio_file(path: &Path) -> bool {
+    path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| AUDIO_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 pub struct SpectrogramExportSummary {
     pub output_path: String,
     pub estimated_cutoff_hz: Option<i64>,
@@ -226,11 +234,7 @@ pub fn scan_audio_files(folder_path: &str) -> Result<Vec<ScannedAudioFile>, Stri
 }
 
 fn is_audio_file(path: &Path) -> bool {
-    path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| AUDIO_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
+    is_supported_audio_file(path)
 }
 
 fn read_audio_comment(path: &Path) -> Option<String> {

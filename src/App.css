@@ -450,8 +450,106 @@ a {
   color: #5f5f5f;
 }
 
+.settings-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin: 6px 0 12px;
+}
+
+.settings-card {
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  background: var(--surface-bg);
+  padding: 14px;
+}
+
+.settings-card h3 {
+  margin: 0 0 10px;
+}
+
+.settings-card .auth-actions:last-child {
+  margin-bottom: 0;
+}
+
+.settings-card .setting-toggle {
+  justify-content: space-between;
+}
+
+.settings-card .setting-toggle > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-card-connections {
+  order: -1;
+}
+
 .auth-actions {
   margin-bottom: 16px;
+}
+
+.connection-actions {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+}
+
+.connection-actions-spotify {
+  justify-content: flex-start;
+}
+
+.connect-btn {
+  display: inline-block;
+  padding: 0;
+  min-width: 0;
+  box-shadow: none;
+  border: none;
+  background: transparent;
+}
+
+.connect-btn:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.connect-btn:active:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.connect-btn:focus-visible {
+  outline: 2px solid #1f3b70;
+  outline-offset: 2px;
+}
+
+.connect-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.connect-btn-soundcloud {
+  border-radius: 4px;
+}
+
+.connect-btn-official-soundcloud {
+  display: block;
+  width: auto;
+  height: 25px;
+}
+
+.connect-btn-spotify {
+  border-radius: 4px;
+}
+
+.connect-btn-official-spotify {
+  display: block;
+  width: auto;
+  height: 25px;
+}
+
+.connection-account-label {
+  margin: -10px 0 14px;
+  font-size: 0.82rem;
+  color: inherit;
 }
 
 .auth-actions .badge {
@@ -470,6 +568,26 @@ a {
 .setting-toggle input[type="checkbox"] {
   width: 18px;
   height: 18px;
+}
+
+@media (max-width: 640px) {
+  .connect-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .connect-btn-official-soundcloud {
+    margin: 0 auto;
+  }
+
+  .connect-btn-official-spotify {
+    margin: 0 auto;
+  }
+
+  .connection-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 .track-list {

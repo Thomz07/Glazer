@@ -24,7 +24,8 @@ type PlaylistDetailsProps = {
   overwriteExistingGlobalAnalysis: boolean;
   hasAvailableLocalFolder: boolean;
   analyzableTracksCount: number;
-  estimatedGlobalAnalysisSeconds: number;
+  estimatedGlobalAnalysisMinSeconds: number;
+  estimatedGlobalAnalysisMaxSeconds: number;
   activeFilterCount: number;
   hasActiveTrackFilters: boolean;
   isFilterMenuOpen: boolean;
@@ -70,7 +71,8 @@ export function PlaylistDetailsView({
   overwriteExistingGlobalAnalysis,
   hasAvailableLocalFolder,
   analyzableTracksCount,
-  estimatedGlobalAnalysisSeconds,
+  estimatedGlobalAnalysisMinSeconds,
+  estimatedGlobalAnalysisMaxSeconds,
   activeFilterCount,
   hasActiveTrackFilters,
   isFilterMenuOpen,
@@ -262,7 +264,7 @@ export function PlaylistDetailsView({
                 <>
                   <p className="actions-disclaimer">{t("globalAudioAnalysisDisclaimer")}</p>
                   <p className="actions-disclaimer">
-                    {t("globalAudioAnalysisEstimatePrefix")} {formatCount(analyzableTracksCount)} {t("tracksUnit")} : {formatEstimatedDuration(estimatedGlobalAnalysisSeconds)}
+                    {t("globalAudioAnalysisEstimatePrefix")} {formatCount(analyzableTracksCount)} {t("tracksUnit")} : {formatEstimatedDuration(estimatedGlobalAnalysisMinSeconds)} - {formatEstimatedDuration(estimatedGlobalAnalysisMaxSeconds)}
                   </p>
                   <label className="setting-toggle actions-option">
                     <input

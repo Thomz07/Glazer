@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use rusqlite::{params, Connection};
 
-use crate::local_files::{analyze_file_cutoff_hz, extract_local_metadata_fast, normalize_soundcloud_url, quality_label_from_max_frequency, ScannedAudioFile};
+use crate::local_files::{analyze_file_cutoff_hz, extract_local_metadata_fast, is_supported_audio_file, normalize_soundcloud_url, quality_label_from_max_frequency, ScannedAudioFile};
 use crate::models::{LocalAudioFileInfo, Playlist, PlaylistTrack};
 
 pub struct PlaylistGlobalAudioAnalysisStats {
@@ -298,6 +298,22 @@ pub fn has_access_token(db_path: &Path) -> Result<bool, String> {
     Ok(get_access_token(db_path)?.is_some())
 }
 
+pub fn clear_soundcloud_tokens(db_path: &Path) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute("DELETE FROM soundcloud_tokens WHERE id = 1", [])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn clear_spotify_tokens(db_path: &Path) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute("DELETE FROM spotify_tokens WHERE id = 1", [])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub fn replace_playlists(db_path: &Path, playlists: &[Playlist]) -> Result<(), String> {
     let connection = open_connection(db_path)?;
     let transaction = connection
@@ -536,6 +552,37 @@ pub fn set_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) 
             "
             INSERT INTO app_settings (key, value)
             VALUES ('download_rename_with_soundcloud_title', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_analysis_auto_apply_frequency_max(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'analysis_auto_apply_frequency_max'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(true))
+}
+
+pub fn set_analysis_auto_apply_frequency_max(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('analysis_auto_apply_frequency_max', ?1)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![if enabled { "true" } else { "false" }],
@@ -852,12 +899,46 @@ pub fn upsert_playlist_track_file_link_manual(
     track_permalink_url: &str,
     file_path: &str,
 ) -> Result<(), String> {
+    let trimmed_file_path = file_path.trim();
+    if trimmed_file_path.is_empty() {
+        return Err("Chemin du fichier local invalide.".to_string());
+    }
+
     let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
         .ok_or_else(|| "URL SoundCloud de la track invalide.".to_string())?;
 
-    let file_path_obj = Path::new(file_path);
+    let linked_folder = get_playlist_folder_link(db_path, playlist_id)?
+        .ok_or_else(|| "Aucun dossier local associe a cette playlist.".to_string())?;
+    let linked_folder_trimmed = linked_folder.trim();
+    if linked_folder_trimmed.is_empty() {
+        return Err("Dossier local associe invalide.".to_string());
+    }
+
+    let linked_folder_path = Path::new(linked_folder_trimmed);
+    if !linked_folder_path.exists() || !linked_folder_path.is_dir() {
+        return Err("Dossier local associe introuvable.".to_string());
+    }
+
+    let file_path_obj = Path::new(trimmed_file_path);
     if !file_path_obj.exists() || !file_path_obj.is_file() {
         return Err("Fichier local introuvable.".to_string());
+    }
+    if !is_supported_audio_file(file_path_obj) {
+        return Err("Association refusee: seuls les fichiers audio sont autorises.".to_string());
+    }
+
+    let canonical_folder = linked_folder_path
+        .canonicalize()
+        .map_err(|error| format!("Impossible de lire le dossier local associe: {error}"))?;
+    let canonical_file = file_path_obj
+        .canonicalize()
+        .map_err(|error| format!("Impossible de lire le fichier local: {error}"))?;
+
+    if !canonical_file.starts_with(&canonical_folder) {
+        return Err(
+            "Association refusee: le fichier doit se trouver dans le dossier local associe a la playlist."
+                .to_string(),
+        );
     }
 
     let metadata = std::fs::metadata(file_path_obj).map_err(|error| error.to_string())?;
@@ -871,9 +952,9 @@ pub fn upsert_playlist_track_file_link_manual(
         .file_name()
         .and_then(|value| value.to_str())
         .map(|value| value.to_string())
-        .unwrap_or_else(|| file_path.to_string());
+        .unwrap_or_else(|| trimmed_file_path.to_string());
 
-    let extracted = extract_local_metadata_fast(file_path, Some(&file_name), file_size_bytes);
+    let extracted = extract_local_metadata_fast(trimmed_file_path, Some(&file_name), file_size_bytes);
     let scanned_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -927,7 +1008,7 @@ pub fn upsert_playlist_track_file_link_manual(
             params![
                 playlist_id,
                 normalized_url,
-                file_path,
+                trimmed_file_path,
                 file_name,
                 file_size_bytes,
                 modified_at,
