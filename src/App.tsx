@@ -1529,7 +1529,10 @@ function App() {
   return (
     <main className="app">
       <header className="header">
-        <h1>Glazer</h1>
+        <div className="app-brand">
+          <img src="/glazer-logo.png" alt="" className="app-brand-logo" aria-hidden="true" />
+          <h1>lazer</h1>
+        </div>
         <div className="tabs">
           <span
             className={isAnyLoading ? "header-loading-spinner active" : "header-loading-spinner"}

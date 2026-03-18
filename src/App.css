@@ -46,6 +46,29 @@
   margin-bottom: 10px;
 }
 
+.header h1 {
+  margin: 0;
+}
+
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.app-brand h1 {
+  margin: 0;
+  margin-left:-6px;
+}
+
+.app-brand-logo {
+  width: 35px;
+  height: 35px;
+  object-fit: cover;
+}
+
 .tabs {
   display: flex;
   align-items: center;
@@ -94,7 +117,7 @@
   gap: 12px;
   margin-bottom: 12px;
   position: sticky;
-  top: -1px;
+  top: 0px;
   z-index: 10;
   background-color: var(--page-bg);
   margin: 0px 0px 20px;
