@@ -4,186 +4,96 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { translations, type Language, type TranslationKey } from "./i18n";
+import { PlaylistList } from "./components/PlaylistList";
+import { PlaylistDetailsView } from "./components/PlaylistDetails";
+import { SettingsView } from "./components/SettingsView";
+import { TrackPanel } from "./components/TrackPanel";
+import { useAsyncMap } from "./hooks/useAsyncMap";
+import { useLocalFolder } from "./hooks/useLocalFolder";
+import { usePlaylistDetails } from "./hooks/usePlaylistDetails";
+import { usePlaylists } from "./hooks/usePlaylists";
+import { useUnicodeSpinner } from "./hooks/useUnicodeSpinner";
+import type {
+  AudioQualityFilter,
+  AuthStartPayload,
+  CoverQuality,
+  DebugSettings,
+  DownloadSourceFilter,
+  HypedditDownloadProgressPayload,
+  HypedditDownloadResult,
+  LocalAnalysisUpdateResult,
+  LocalAudioFileInfo,
+  LocalDownloadFilter,
+  MiscSettings,
+  MovePlaylistTrackResult,
+  Playlist,
+  PlaylistCoverMode,
+  PlaylistDetails,
+  PlaylistGlobalAudioAnalysisResult,
+  PlaylistLocalFolderAssociation,
+  PlaylistLocalScanResult,
+  PlaylistTrack,
+  SoundCloudConfigStatus,
+  SpectrogramAnalysisScope,
+  SpectrogramPreviewResult,
+  SpotifyConfigStatus,
+  ThemeMode,
+  TrackSortOrder,
+  TrackViewMode,
+  View,
+} from "./types";
 import "./App.css";
 
-type View = "playlists" | "settings";
-
-type Playlist = {
-  id: number;
-  title: string;
-  track_count: number;
-  is_private: boolean;
-  artwork_url?: string | null;
-  has_local_link: boolean;
-  has_local_folder: boolean;
-};
-
-type PlaylistTrack = {
-  id: number;
-  title: string;
-  duration_ms?: number | null;
-  artist?: string | null;
-  permalink_url?: string | null;
-  associated_url?: string | null;
-  artwork_url?: string | null;
-  genre?: string | null;
-  bpm?: number | null;
-  key_signature?: string | null;
-  playback_count?: number | null;
-  likes_count?: number | null;
-  reposts_count?: number | null;
-  comment_count?: number | null;
-  created_at?: string | null;
-  release_date?: string | null;
-  tag_list?: string | null;
-  label_name?: string | null;
-  local_file?: LocalAudioFileInfo | null;
-};
-
-type LocalAudioFileInfo = {
-  file_path: string;
-  file_name: string;
-  file_size_bytes?: number | null;
-  modified_at?: number | null;
-  matched_soundcloud_url: string;
-  local_cover_data_url?: string | null;
-  local_title?: string | null;
-  local_artist?: string | null;
-  local_duration_seconds?: number | null;
-  local_format?: string | null;
-  local_bitrate_kbps?: number | null;
-  local_max_frequency_hz?: number | null;
-  local_quality_label?: string | null;
-  local_sample_rate_hz?: number | null;
-  local_channels?: number | null;
-};
-
-type PlaylistDetails = {
-  id: number;
-  title: string;
-  track_count: number;
-  is_private: boolean;
-  permalink_url?: string | null;
-  tracks: PlaylistTrack[];
-};
-
-type SoundCloudConfigStatus = {
-  configured: boolean;
-  connected: boolean;
-  redirect_uri: string;
-};
-
-type SpotifyConfigStatus = {
-  configured: boolean;
-  connected: boolean;
-  redirect_uri: string;
-};
-
-type AuthStartPayload = {
-  state: string;
-  auth_url: string;
-  code_verifier?: string | null;
-};
-
-type DebugSettings = {
-  soundcloud_fallback_headless: boolean;
-  logs_enabled: boolean;
-};
-
-type PlaylistCoverMode = "first" | "random";
-
-type MiscSettings = {
-  playlist_cover_mode: PlaylistCoverMode;
-  download_embed_cover?: boolean;
-  download_rename_with_soundcloud_title?: boolean;
-  hypeddit_download_headless?: boolean;
-  hypeddit_download_comment?: string;
-  hypeddit_download_name?: string;
-  hypeddit_download_email?: string;
-};
-
-type PlaylistLocalFolderAssociation = {
-  playlist_id: number;
-  folder_path?: string | null;
-  folder_available: boolean;
-};
-
-type PlaylistDetailsCacheEntry = {
-  details: PlaylistDetails;
-  cached_at_ms: number;
-};
-
-type PlaylistLocalScanResult = {
-  playlist_id: number;
-  folder_path: string;
-  scanned_files: number;
-  matched_files: number;
-};
-
-type ThemeMode = "light" | "dark";
-type CoverQuality = "large" | "t300x300" | "t500x500" | "original";
-type TrackSortOrder = "original" | "alphabetical" | "mostPlayed";
-type DownloadSourceFilter = "all" | "downloadable" | "hypeddit" | "bandcamp";
-type LocalDownloadFilter = "all" | "downloaded" | "notDownloaded";
-type AudioQualityFilter = "all" | "high" | "good" | "medium" | "low" | "unknown";
-type TrackViewMode = "list" | "icons";
-type SpectrogramAnalysisScope = "quarter" | "half" | "full";
-
-type SpectrogramPreviewResult = {
-  temp_path: string;
-  image_data_url: string;
-  estimated_cutoff_hz?: number | null;
-};
-
-type LocalAnalysisUpdateResult = {
-  local_max_frequency_hz?: number | null;
-  local_quality_label?: string | null;
-};
-
-type PlaylistGlobalAudioAnalysisResult = {
-  analyzed_tracks: number;
-  updated_tracks: number;
-  skipped_tracks: number;
-  failed_tracks: number;
-};
-
-type MovePlaylistTrackResult = {
-  moved_local_link: boolean;
-  moved_local_file_path?: string | null;
-};
-
-type HypedditDownloadResult = {
-  file_path: string;
-  file_name: string;
-  overwrote_existing: boolean;
-};
-
-type HypedditDownloadProgressPayload = {
-  phase: string;
-};
-
-const MAX_PLAYLIST_DETAILS_CACHE_SIZE = 4;
+const ASYNC_KEYS = [
+  "loadingPlaylists",
+  "connecting",
+  "connectingSpotify",
+  "savingPlaylistCoverMode",
+  "loadingPlaylistFolder",
+  "scanningLocalFiles",
+  "associatingLocalFile",
+  "dissociatingLocalFile",
+  "embeddingLocalCover",
+  "downloadingFromHypeddit",
+  "exportingSpectrogram",
+  "loadingSpectrogramPreview",
+  "savingManualCutoff",
+  "runningGlobalAudioAnalysis",
+  "movingTrackBetweenPlaylists",
+  "refreshingPlaylistDetails",
+] as const;
 
 function App() {
   const cardScrollRef = useRef<HTMLElement | null>(null);
   const sectionControlsRef = useRef<HTMLDivElement | null>(null);
   const [activeView, setActiveView] = useState<View>("playlists");
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const { playlists, setPlaylists } = usePlaylists();
+  const {
+    selectedPlaylistDetails,
+    setSelectedPlaylistDetails,
+    setSelectedPlaylistDetailsWithCache,
+    updateSelectedPlaylistDetailsWithCache,
+    setSelectedTrackId,
+    selectedTrackInfo,
+    playlistDetailsCacheRef,
+  } = usePlaylistDetails();
+  const {
+    playlistFolderPath,
+    setPlaylistFolderPath,
+    playlistFolderAvailable,
+    setPlaylistFolderAvailable,
+    hasAvailableLocalFolder,
+  } = useLocalFolder();
+  const { state: asyncState, setAsyncState } = useAsyncMap(ASYNC_KEYS);
   const [configStatus, setConfigStatus] = useState<SoundCloudConfigStatus | null>(null);
   const [spotifyStatus, setSpotifyStatus] = useState<SpotifyConfigStatus | null>(null);
   const [status, setStatus] = useState("");
   const [globalPopupMessage, setGlobalPopupMessage] = useState<string | null>(null);
-  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [connectingSpotify, setConnectingSpotify] = useState(false);
-  const [selectedPlaylistDetails, setSelectedPlaylistDetails] = useState<PlaylistDetails | null>(null);
-  const [selectedTrackInfo, setSelectedTrackInfo] = useState<PlaylistTrack | null>(null);
   const [debugSettings, setDebugSettings] = useState<DebugSettings>({
     soundcloud_fallback_headless: true,
     logs_enabled: true,
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
-  const [savingPlaylistCoverMode, setSavingPlaylistCoverMode] = useState(false);
   const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
   const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
@@ -201,66 +111,15 @@ function App() {
   const [audioQualityFilter, setAudioQualityFilter] = useState<AudioQualityFilter>("all");
   const [trackViewMode, setTrackViewMode] = useState<TrackViewMode>("list");
   const [spectrogramAnalysisScope, setSpectrogramAnalysisScope] = useState<SpectrogramAnalysisScope>("half");
-  const [playlistFolderPath, setPlaylistFolderPath] = useState("");
-  const [playlistFolderAvailable, setPlaylistFolderAvailable] = useState(true);
-  const [loadingPlaylistFolder, setLoadingPlaylistFolder] = useState(false);
-  const [scanningLocalFiles, setScanningLocalFiles] = useState(false);
-  const [associatingLocalFile, setAssociatingLocalFile] = useState(false);
-  const [dissociatingLocalFile, setDissociatingLocalFile] = useState(false);
-  const [embeddingLocalCover, setEmbeddingLocalCover] = useState(false);
-  const [downloadingFromHypeddit, setDownloadingFromHypeddit] = useState(false);
   const [hypedditDownloadPhase, setHypedditDownloadPhase] = useState("");
   const [showHypedditDownloadMenu, setShowHypedditDownloadMenu] = useState(false);
   const [overwriteExistingHypedditDownload, setOverwriteExistingHypedditDownload] = useState(false);
-  const [exportingSpectrogram, setExportingSpectrogram] = useState(false);
-  const [loadingSpectrogramPreview, setLoadingSpectrogramPreview] = useState(false);
-  const [savingManualCutoff, setSavingManualCutoff] = useState(false);
-  const [runningGlobalAudioAnalysis, setRunningGlobalAudioAnalysis] = useState(false);
   const [confirmGlobalAudioAnalysis, setConfirmGlobalAudioAnalysis] = useState(false);
   const [overwriteExistingGlobalAnalysis, setOverwriteExistingGlobalAnalysis] = useState(false);
   const [manualCutoffInputHz, setManualCutoffInputHz] = useState("");
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
   const [targetPlaylistIdForMove, setTargetPlaylistIdForMove] = useState<number | "">("");
-  const [movingTrackBetweenPlaylists, setMovingTrackBetweenPlaylists] = useState(false);
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
-  const playlistDetailsCacheRef = useRef<Map<number, PlaylistDetailsCacheEntry>>(new Map());
-  const [refreshingPlaylistDetails, setRefreshingPlaylistDetails] = useState(false);
-
-  function upsertPlaylistDetailsCache(details: PlaylistDetails) {
-    // Reinsert key to keep recency order, then evict oldest entries if needed.
-    playlistDetailsCacheRef.current.delete(details.id);
-    playlistDetailsCacheRef.current.set(details.id, {
-      details,
-      cached_at_ms: Date.now(),
-    });
-
-    while (playlistDetailsCacheRef.current.size > MAX_PLAYLIST_DETAILS_CACHE_SIZE) {
-      const oldest = playlistDetailsCacheRef.current.keys().next().value as number | undefined;
-      if (oldest === undefined) {
-        break;
-      }
-      playlistDetailsCacheRef.current.delete(oldest);
-    }
-  }
-
-  function setSelectedPlaylistDetailsWithCache(details: PlaylistDetails | null) {
-    if (details) {
-      upsertPlaylistDetailsCache(details);
-    }
-    setSelectedPlaylistDetails(details);
-  }
-
-  function updateSelectedPlaylistDetailsWithCache(
-    updater: (current: PlaylistDetails | null) => PlaylistDetails | null,
-  ) {
-    setSelectedPlaylistDetails((current) => {
-      const next = updater(current);
-      if (next) {
-        upsertPlaylistDetailsCache(next);
-      }
-      return next;
-    });
-  }
 
   function applyPlaylistsSnapshot(items: Playlist[], clearSelectionWhenEmpty: boolean) {
     setPlaylists(items);
@@ -274,12 +133,12 @@ function App() {
 
     if (selectedPlaylistDetails && !currentIds.has(selectedPlaylistDetails.id)) {
       setSelectedPlaylistDetails(null);
-      setSelectedTrackInfo(null);
+      setSelectedTrackId(null);
     }
 
     if (clearSelectionWhenEmpty && items.length === 0) {
       setSelectedPlaylistDetails(null);
-      setSelectedTrackInfo(null);
+      setSelectedTrackId(null);
       playlistDetailsCacheRef.current.clear();
     }
   }
@@ -362,7 +221,9 @@ function App() {
       setLanguage(initialLanguage);
       setSpectrogramAnalysisScope(initialSpectrogramAnalysisScope);
 
-    loadInitialData();
+    void loadInitialData();
+    // Initial bootstrap is intentionally one-shot on app mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -374,7 +235,7 @@ function App() {
     spectrogramPreviewTempPathRef.current = null;
     setSpectrogramPreview(null);
     setManualCutoffInputHz("");
-    setLoadingSpectrogramPreview(false);
+    setAsyncState("loadingSpectrogramPreview", false);
     void removeTemporaryPreview(previousPath);
 
     return () => {
@@ -446,7 +307,7 @@ function App() {
       cutoffHz,
     });
 
-    setSelectedPlaylistDetails((current) => {
+    updateSelectedPlaylistDetailsWithCache((current) => {
       if (!current) {
         return current;
       }
@@ -467,21 +328,6 @@ function App() {
         ),
       };
     });
-
-    setSelectedTrackInfo((current) => {
-      if (!current || current.id !== selectedTrackInfo.id || !current.local_file) {
-        return current;
-      }
-
-      return {
-        ...current,
-        local_file: {
-          ...current.local_file,
-          local_max_frequency_hz: analysisUpdate.local_max_frequency_hz ?? current.local_file.local_max_frequency_hz,
-          local_quality_label: analysisUpdate.local_quality_label ?? current.local_file.local_quality_label,
-        },
-      };
-    });
   }
 
   async function saveManualCutoff() {
@@ -492,13 +338,13 @@ function App() {
     }
 
     try {
-      setSavingManualCutoff(true);
+      setAsyncState("savingManualCutoff", true);
       await persistCutoffAnalysis(parsed);
       setStatus(`${t("localSpectrogramManualSaved")}: ${formatFrequency(parsed)}`);
     } catch (error) {
       setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
     } finally {
-      setSavingManualCutoff(false);
+      setAsyncState("savingManualCutoff", false);
     }
   }
 
@@ -508,7 +354,7 @@ function App() {
       return;
     }
 
-    setLoadingSpectrogramPreview(true);
+    setAsyncState("loadingSpectrogramPreview", true);
 
     try {
       const result = await invoke<SpectrogramPreviewResult>("generate_local_spectrogram_preview", {
@@ -536,7 +382,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
     } finally {
-      setLoadingSpectrogramPreview(false);
+      setAsyncState("loadingSpectrogramPreview", false);
     }
   }
 
@@ -601,19 +447,19 @@ function App() {
   }
 
   async function loadPlaylists() {
-    setLoadingPlaylists(true);
+    setAsyncState("loadingPlaylists", true);
     try {
       const items = await invoke<Playlist[]>("get_playlists");
       applyPlaylistsSnapshot(items, true);
     } catch (error) {
       setStatus(`${t("statusPlaylistsError")}: ${String(error)}`);
     } finally {
-      setLoadingPlaylists(false);
+      setAsyncState("loadingPlaylists", false);
     }
   }
 
   async function syncPlaylists(silent = false) {
-    setLoadingPlaylists(true);
+    setAsyncState("loadingPlaylists", true);
     try {
       const items = await invoke<Playlist[]>("sync_soundcloud_playlists");
       applyPlaylistsSnapshot(items, false);
@@ -626,7 +472,7 @@ function App() {
         setStatus(`${t("statusSyncError")}: ${String(error)}`);
       }
     } finally {
-      setLoadingPlaylists(false);
+      setAsyncState("loadingPlaylists", false);
     }
   }
 
@@ -737,7 +583,7 @@ function App() {
 
   async function savePlaylistCoverMode(mode: PlaylistCoverMode) {
     try {
-      setSavingPlaylistCoverMode(true);
+      setAsyncState("savingPlaylistCoverMode", true);
       await invoke("set_playlist_cover_mode", { mode });
       setPlaylistCoverMode(mode);
 
@@ -750,13 +596,13 @@ function App() {
     } catch (error) {
       setStatus(`${t("statusPlaylistCoverModeError")}: ${String(error)}`);
     } finally {
-      setSavingPlaylistCoverMode(false);
+      setAsyncState("savingPlaylistCoverMode", false);
     }
   }
 
   async function connectSoundCloud() {
     setStatus("");
-    setConnecting(true);
+    setAsyncState("connecting", true);
 
     try {
       const start = await invoke<AuthStartPayload>("start_soundcloud_auth");
@@ -774,13 +620,13 @@ function App() {
     } catch (error) {
       setStatus(`${t("statusAuthError")}: ${String(error)}`);
     } finally {
-      setConnecting(false);
+      setAsyncState("connecting", false);
     }
   }
 
   async function connectSpotify() {
     setStatus("");
-    setConnectingSpotify(true);
+    setAsyncState("connectingSpotify", true);
 
     try {
       const start = await invoke<AuthStartPayload>("start_spotify_auth");
@@ -802,7 +648,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
     } finally {
-      setConnectingSpotify(false);
+      setAsyncState("connectingSpotify", false);
     }
   }
 
@@ -812,7 +658,7 @@ function App() {
 
     if (cached) {
       setSelectedPlaylistDetailsWithCache(cached.details);
-      setSelectedTrackInfo(null);
+      setSelectedTrackId(null);
       await loadPlaylistLocalFolderAssociation(playlistId);
       return;
     }
@@ -823,7 +669,7 @@ function App() {
         headless: debugSettings.soundcloud_fallback_headless,
       });
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo(null);
+      setSelectedTrackId(null);
       await loadPlaylistLocalFolderAssociation(playlistId);
     } catch (error) {
       const errorMessage = String(error);
@@ -841,7 +687,7 @@ function App() {
 
   function closePlaylistDetails() {
     setSelectedPlaylistDetails(null);
-    setSelectedTrackInfo(null);
+    setSelectedTrackId(null);
     setPlaylistFolderPath("");
     setPlaylistFolderAvailable(true);
     setIsFilterMenuOpen(false);
@@ -852,7 +698,7 @@ function App() {
   }
 
   async function loadPlaylistLocalFolderAssociation(playlistId: number) {
-    setLoadingPlaylistFolder(true);
+    setAsyncState("loadingPlaylistFolder", true);
     try {
       const association = await invoke<PlaylistLocalFolderAssociation>("get_playlist_local_folder_association", {
         playlistId,
@@ -868,7 +714,7 @@ function App() {
       setPlaylistFolderPath("");
       setPlaylistFolderAvailable(true);
     } finally {
-      setLoadingPlaylistFolder(false);
+      setAsyncState("loadingPlaylistFolder", false);
     }
   }
 
@@ -890,7 +736,7 @@ function App() {
 
       setPlaylistFolderPath(selected);
       setPlaylistFolderAvailable(true);
-      setScanningLocalFiles(true);
+      setAsyncState("scanningLocalFiles", true);
       setStatus(t("localScanRunning"));
 
       const result = await invoke<PlaylistLocalScanResult>("scan_playlist_local_files", {
@@ -913,16 +759,16 @@ function App() {
         `${t("localScanDone")}: ${linkedTracks}/${details.track_count} ${t("localTracksLinked")} (${result.matched_files}/${result.scanned_files} ${t("localScanMatched")})`,
       );
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo((current) => {
-        if (!current) {
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
           return null;
         }
-        return details.tracks.find((track) => track.id === current.id) ?? null;
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
     } catch (error) {
       setStatus(`${t("localScanError")}: ${String(error)}`);
     } finally {
-      setScanningLocalFiles(false);
+      setAsyncState("scanningLocalFiles", false);
     }
   }
 
@@ -951,8 +797,6 @@ function App() {
           tracks: current.tracks.map((track) => ({ ...track, local_file: null })),
         };
       });
-
-      setSelectedTrackInfo((current) => (current ? { ...current, local_file: null } : null));
     } catch (error) {
       setStatus(`${t("localUnlinkError")}: ${String(error)}`);
     }
@@ -979,7 +823,7 @@ function App() {
         return;
       }
 
-      setAssociatingLocalFile(true);
+      setAsyncState("associatingLocalFile", true);
       await invoke("associate_playlist_track_local_file", {
         playlistId: selectedPlaylistDetails.id,
         trackPermalinkUrl: selectedTrackInfo.permalink_url,
@@ -991,17 +835,17 @@ function App() {
       });
 
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo((current) => {
-        if (!current) {
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
           return null;
         }
-        return details.tracks.find((track) => track.id === current.id) ?? null;
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
       setStatus(t("localAssociateDone"));
     } catch (error) {
       setStatus(`${t("localAssociateError")}: ${String(error)}`);
     } finally {
-      setAssociatingLocalFile(false);
+      setAsyncState("associatingLocalFile", false);
     }
   }
 
@@ -1011,7 +855,7 @@ function App() {
     }
 
     try {
-      setDissociatingLocalFile(true);
+      setAsyncState("dissociatingLocalFile", true);
       const trackId = selectedTrackInfo.id;
       await invoke("dissociate_playlist_track_local_file", {
         playlistId: selectedPlaylistDetails.id,
@@ -1036,29 +880,18 @@ function App() {
         };
       });
 
-      setSelectedTrackInfo((current) => {
-        if (!current || current.id !== trackId) {
-          return current;
-        }
-
-        return {
-          ...current,
-          local_file: null,
-        };
-      });
-
       const previousPreviewPath = spectrogramPreviewTempPathRef.current;
       spectrogramPreviewTempPathRef.current = null;
       setSpectrogramPreview(null);
       setManualCutoffInputHz("");
-      setLoadingSpectrogramPreview(false);
+      setAsyncState("loadingSpectrogramPreview", false);
       await removeTemporaryPreview(previousPreviewPath);
 
       setStatus(t("localDissociateDone"));
     } catch (error) {
       setStatus(`${t("localDissociateError")}: ${String(error)}`);
     } finally {
-      setDissociatingLocalFile(false);
+      setAsyncState("dissociatingLocalFile", false);
     }
   }
 
@@ -1073,7 +906,7 @@ function App() {
     }
 
     try {
-      setMovingTrackBetweenPlaylists(true);
+      setAsyncState("movingTrackBetweenPlaylists", true);
       const targetPlaylistId = Number(targetPlaylistIdForMove);
       const result = await invoke<MovePlaylistTrackResult>("move_track_between_playlists", {
         sourcePlaylistId: selectedPlaylistDetails.id,
@@ -1099,13 +932,16 @@ function App() {
           playlistId: targetPlaylistId,
           headless: debugSettings.soundcloud_fallback_headless,
         });
-        upsertPlaylistDetailsCache(refreshedTargetDetails);
+        playlistDetailsCacheRef.current.set(targetPlaylistId, {
+          details: refreshedTargetDetails,
+          cached_at_ms: Date.now(),
+        });
       } catch {
         // If target refresh fails, avoid stale cache by forcing a fresh load on next open.
         playlistDetailsCacheRef.current.delete(targetPlaylistId);
       }
 
-      setSelectedTrackInfo(null);
+      setSelectedTrackId(null);
       await loadPlaylistLocalFolderAssociation(selectedPlaylistDetails.id);
       await syncPlaylists(true);
 
@@ -1124,7 +960,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("moveTrackError")}: ${String(error)}`);
     } finally {
-      setMovingTrackBetweenPlaylists(false);
+      setAsyncState("movingTrackBetweenPlaylists", false);
     }
   }
 
@@ -1140,7 +976,7 @@ function App() {
     }
 
     try {
-      setEmbeddingLocalCover(true);
+      setAsyncState("embeddingLocalCover", true);
       await invoke("embed_local_mp3_cover", {
         filePath: selectedTrackInfo.local_file.file_path,
         artworkUrl,
@@ -1151,19 +987,45 @@ function App() {
       });
 
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo((current) => {
-        if (!current) {
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
           return null;
         }
-        return details.tracks.find((track) => track.id === current.id) ?? null;
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
 
       setStatus(t("localEmbedCoverDone"));
     } catch (error) {
       setStatus(`${t("localEmbedCoverError")}: ${String(error)}`);
     } finally {
-      setEmbeddingLocalCover(false);
+      setAsyncState("embeddingLocalCover", false);
     }
+  }
+
+  async function getHydratedLocalFileWithRetry(
+    playlistId: number,
+    trackPermalinkUrl: string,
+    attempts = 5,
+    delayMs = 200,
+  ) {
+    for (let index = 0; index < attempts; index += 1) {
+      const hydratedLocalFile = await invoke<LocalAudioFileInfo | null>("get_playlist_track_local_file_info", {
+        playlistId,
+        trackPermalinkUrl,
+      });
+
+      if (hydratedLocalFile) {
+        return hydratedLocalFile;
+      }
+
+      if (index < attempts - 1) {
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, delayMs);
+        });
+      }
+    }
+
+    return null;
   }
 
   async function revealSelectedTrackLocalFileInExplorer() {
@@ -1201,7 +1063,7 @@ function App() {
     }
 
     try {
-      setDownloadingFromHypeddit(true);
+      setAsyncState("downloadingFromHypeddit", true);
       setHypedditDownloadPhase("");
       const result = await invoke<HypedditDownloadResult>("download_hypeddit_track_to_local_folder", {
         playlistId: selectedPlaylistDetails.id,
@@ -1219,14 +1081,10 @@ function App() {
         matched_soundcloud_url: selectedTrackInfo.permalink_url,
       };
 
-      await new Promise((resolve) => {
-        window.setTimeout(resolve, 500);
-      });
-
-      const hydratedLocalFile = await invoke<LocalAudioFileInfo | null>("get_playlist_track_local_file_info", {
-        playlistId: selectedPlaylistDetails.id,
-        trackPermalinkUrl: selectedTrackInfo.permalink_url,
-      });
+      const hydratedLocalFile = await getHydratedLocalFileWithRetry(
+        selectedPlaylistDetails.id,
+        selectedTrackInfo.permalink_url,
+      );
 
       const localFileForUi = hydratedLocalFile ?? downloadedLocalFile;
 
@@ -1248,17 +1106,6 @@ function App() {
         };
       });
 
-      setSelectedTrackInfo((current) => {
-        if (!current || current.id !== selectedTrackInfo.id) {
-          return current;
-        }
-
-        return {
-          ...current,
-          local_file: localFileForUi,
-        };
-      });
-
       setShowHypedditDownloadMenu(false);
       setOverwriteExistingHypedditDownload(false);
       setStatus(
@@ -1269,7 +1116,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
     } finally {
-      setDownloadingFromHypeddit(false);
+      setAsyncState("downloadingFromHypeddit", false);
       setHypedditDownloadPhase("");
     }
   }
@@ -1280,18 +1127,18 @@ function App() {
     }
 
     try {
-      setRefreshingPlaylistDetails(true);
+      setAsyncState("refreshingPlaylistDetails", true);
       const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
         playlistId: selectedPlaylistDetails.id,
         headless: debugSettings.soundcloud_fallback_headless,
       });
 
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo((current) => {
-        if (!current) {
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
           return null;
         }
-        return details.tracks.find((track) => track.id === current.id) ?? null;
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
 
       await loadPlaylistLocalFolderAssociation(details.id);
@@ -1309,7 +1156,7 @@ function App() {
 
       setStatus(`${t("statusPlaylistError")}: ${errorMessage}`);
     } finally {
-      setRefreshingPlaylistDetails(false);
+      setAsyncState("refreshingPlaylistDetails", false);
     }
   }
 
@@ -1334,7 +1181,7 @@ function App() {
         return;
       }
 
-      setExportingSpectrogram(true);
+      setAsyncState("exportingSpectrogram", true);
 
       const result = await invoke<{ output_path: string; estimated_cutoff_hz?: number | null }>("export_local_spectrogram_jpg", {
         filePath: sourcePath,
@@ -1351,7 +1198,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
     } finally {
-      setExportingSpectrogram(false);
+      setAsyncState("exportingSpectrogram", false);
     }
   }
 
@@ -1368,7 +1215,7 @@ function App() {
     }
 
     try {
-      setRunningGlobalAudioAnalysis(true);
+      setAsyncState("runningGlobalAudioAnalysis", true);
       setConfirmGlobalAudioAnalysis(false);
       setOverwriteExistingGlobalAnalysis(false);
       setStatus(t("globalAudioAnalysisRunning"));
@@ -1383,11 +1230,11 @@ function App() {
         playlistId: selectedPlaylistDetails.id,
       });
       setSelectedPlaylistDetailsWithCache(details);
-      setSelectedTrackInfo((current) => {
-        if (!current) {
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
           return null;
         }
-        return details.tracks.find((track) => track.id === current.id) ?? null;
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
 
       setStatus(
@@ -1396,7 +1243,7 @@ function App() {
     } catch (error) {
       setStatus(`${t("globalAudioAnalysisError")}: ${String(error)}`);
     } finally {
-      setRunningGlobalAudioAnalysis(false);
+      setAsyncState("runningGlobalAudioAnalysis", false);
     }
   }
 
@@ -1650,17 +1497,16 @@ function App() {
   }
 
   function openTrackInfo(track: PlaylistTrack) {
-    setSelectedTrackInfo((current) => {
-      if (current?.id === track.id) {
+    setSelectedTrackId((currentId) => {
+      if (currentId === track.id) {
         return null;
       }
 
-      return track;
+      return track.id;
     });
   }
 
   const filteredTracks = selectedPlaylistDetails ? getFilteredTracks(selectedPlaylistDetails.tracks) : [];
-  const hasAvailableLocalFolder = Boolean(playlistFolderPath.trim()) && playlistFolderAvailable;
   const canDownloadSelectedTrackFromHypeddit =
     hasAvailableLocalFolder &&
     Boolean(selectedTrackInfo?.associated_url) &&
@@ -1677,12 +1523,21 @@ function App() {
     ? selectedPlaylistDetails.tracks.filter((track) => Boolean(track.local_file)).length
     : 0;
   const estimatedGlobalAnalysisSeconds = analyzableTracksCount * 7;
+  const isAnyLoading = Object.values(asyncState).some(Boolean);
+  const headerSpinnerFrame = useUnicodeSpinner(isAnyLoading, "waverows");
 
   return (
     <main className="app">
       <header className="header">
         <h1>Glazer — SoundCloud</h1>
         <div className="tabs">
+          <span
+            className={isAnyLoading ? "header-loading-spinner active" : "header-loading-spinner"}
+            aria-live="polite"
+            aria-label={isAnyLoading ? t("loading") : undefined}
+          >
+            {isAnyLoading ? headerSpinnerFrame : ""}
+          </span>
           <button
             className={activeView === "playlists" ? "tab tab-active" : "tab"}
             onClick={() => setActiveView("playlists")}
@@ -1703,802 +1558,280 @@ function App() {
       {activeView === "playlists" ? (
         <section className="card" ref={(element) => { cardScrollRef.current = element; }}>
           {!selectedPlaylistDetails ? (
-            <>
-              <div className="section-head">
-                <h2>{t("myPlaylists")}</h2>
-                <div className="actions">
-                  <button type="button" onClick={() => { void syncPlaylists(); }}>
-                    {t("refresh")}
-                  </button>
-                </div>
-              </div>
-
-              {loadingPlaylists ? <p>{t("loading")}</p> : null}
-
-              {!loadingPlaylists && playlists.length === 0 ? (
-                <p>{t("noPlaylistFound")}</p>
-              ) : null}
-
-              <ul className="playlist-list">
-                {playlists.map((playlist) => (
-                  <li
-                    key={playlist.id}
-                    className="playlist-item"
-                    onClick={() => openPlaylistDetails(playlist.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openPlaylistDetails(playlist.id);
-                      }
-                    }}
-                  >
-                    <div className="playlist-main">
-                      {playlist.artwork_url ? (
-                        <img src={playlist.artwork_url} alt={playlist.title} className="playlist-cover" />
-                      ) : (
-                        <div className="playlist-cover placeholder">SC</div>
-                      )}
-                      <div className="playlist-text">
-                        <div className="playlist-title-row">
-                          <strong>{playlist.title}</strong>
-                        </div>
-                        <p className="playlist-meta">{playlist.track_count} {t("tracksUnit")}</p>
-                      </div>
-                    </div>
-                    <div className="playlist-badges">
-                      <span className={playlist.is_private ? "badge private" : "badge public"}>
-                        {playlist.is_private ? t("private") : t("public")}
-                      </span>
-                      {playlist.has_local_link ? (
-                        <span className="badge local" title={t("playlistLocalLinked")}>
-                          {t("localBadgeShort")}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className="playlist-action" aria-label={t("openPlaylist")}>
-                      <span className="playlist-arrow">›</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </>
+            <PlaylistList
+              playlists={playlists}
+              loadingPlaylists={asyncState.loadingPlaylists}
+              onSyncPlaylists={() => {
+                syncPlaylists().catch((error) => {
+                  setStatus(`${t("statusSyncError")}: ${String(error)}`);
+                });
+              }}
+              onOpenPlaylistDetails={(playlistId) => {
+                openPlaylistDetails(playlistId).catch((error) => {
+                  setStatus(`${t("statusPlaylistError")}: ${String(error)}`);
+                });
+              }}
+              t={t}
+            />
           ) : (
             <div className={selectedTrackInfo ? "tracks-layout with-panel" : "tracks-layout"}>
-              <section className="tracks-column">
-              <div className="local-folder-association">
-                <div className="local-folder-meta">
-                  <label>
-                    {playlistFolderPath ? t("localFolderLabel") : t("localNoFolderLabel")}
-                  </label>
-                  {playlistFolderPath ? <p className="local-folder-path">{playlistFolderPath}</p> : null}
-                  {playlistFolderPath && !playlistFolderAvailable ? (
-                    <div className="local-folder-warning-row">
-                      <p className="local-folder-warning">{t("localFolderUnavailable")}</p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (selectedPlaylistDetails) {
-                            void loadPlaylistLocalFolderAssociation(selectedPlaylistDetails.id);
-                          }
-                        }}
-                        disabled={loadingPlaylistFolder}
-                      >
-                        {t("refresh")}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  onClick={closePlaylistDetails}
-                >
-                  {t("back")}
-                </button>
-              </div>
-
-              <div className="section-head">
-                <div className="section-head-main">
-                  <h2>{selectedPlaylistDetails.title}</h2>
-                  <p className="playlist-title-meta-inline">
-                    {filteredTracks.length}/{selectedPlaylistDetails.track_count} {t("tracksUnit")} • {selectedPlaylistDetails.is_private ? t("private") : t("public")}
-                  </p>
-                </div>
-                <div className="section-head-controls" ref={sectionControlsRef}>
-                  <button
-                    type="button"
-                    className="icon-toggle-btn"
-                    aria-label={trackViewMode === "list" ? t("viewModeIcons") : t("viewModeList")}
-                    title={trackViewMode === "list" ? t("viewModeIcons") : t("viewModeList")}
-                    onClick={() => setTrackViewMode((current) => (current === "list" ? "icons" : "list"))}
-                  >
-                    {trackViewMode === "list" ? (
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                        <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                        <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                        <rect x="14" y="14" width="7" height="7" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="4" y="5" width="16" height="3" rx="1.5" />
-                        <rect x="4" y="10.5" width="16" height="3" rx="1.5" />
-                        <rect x="4" y="16" width="16" height="3" rx="1.5" />
-                      </svg>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsActionsMenuOpen(false);
-                      setConfirmGlobalAudioAnalysis(false);
-                      setOverwriteExistingGlobalAnalysis(false);
-                      setIsFilterMenuOpen((current) => !current);
-                    }}
-                  >
-                    {hasActiveTrackFilters ? `${t("filterButton")} (${activeFilterCount})` : t("filterButton")}
-                  </button>
-                  {selectedPlaylistDetails ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsFilterMenuOpen(false);
-                        setConfirmGlobalAudioAnalysis(false);
-                        setOverwriteExistingGlobalAnalysis(false);
-                        setIsActionsMenuOpen((current) => !current);
-                      }}
-                    >
-                      {t("actionsButton")}
-                    </button>
-                  ) : null}
-                  {isFilterMenuOpen ? (
-                    <div className="filter-menu">
-                      <h4>{t("filtersTitle")}</h4>
-                      <label className="filter-option filter-option-select">
-                        <span>{t("sortOrderLabel")}</span>
-                        <select
-                          value={trackSortOrder}
-                          onChange={(event) => setTrackSortOrder(event.currentTarget.value as TrackSortOrder)}
-                        >
-                          <option value="original">{t("sortOriginal")}</option>
-                          <option value="alphabetical">{t("sortAlphabetical")}</option>
-                          <option value="mostPlayed">{t("sortMostPlayed")}</option>
-                        </select>
-                      </label>
-
-                      <label className="filter-option filter-option-select">
-                        <span>{t("downloadFilterLabel")}</span>
-                        <select
-                          value={downloadSourceFilter}
-                          onChange={(event) => setDownloadSourceFilter(event.currentTarget.value as DownloadSourceFilter)}
-                        >
-                          <option value="all">{t("downloadAll")}</option>
-                          <option value="downloadable">{t("downloadAny")}</option>
-                          <option value="hypeddit">{t("downloadHypeddit")}</option>
-                          <option value="bandcamp">{t("downloadBandcamp")}</option>
-                        </select>
-                      </label>
-
-                      {playlistFolderPath ? (
-                        <label className="filter-option filter-option-select">
-                          <span>{t("localDownloadFilterLabel")}</span>
-                          <select
-                            value={localDownloadFilter}
-                            onChange={(event) => setLocalDownloadFilter(event.currentTarget.value as LocalDownloadFilter)}
-                          >
-                            <option value="all">{t("localDownloadAll")}</option>
-                            <option value="downloaded">{t("localDownloadOnly")}</option>
-                            <option value="notDownloaded">{t("localNotDownloadedOnly")}</option>
-                          </select>
-                        </label>
-                      ) : null}
-
-                      {playlistFolderPath ? (
-                        <label className="filter-option filter-option-select">
-                          <span>{t("audioQualityFilterLabel")}</span>
-                          <select
-                            value={audioQualityFilter}
-                            onChange={(event) => setAudioQualityFilter(event.currentTarget.value as AudioQualityFilter)}
-                          >
-                            <option value="all">{t("audioQualityFilterAll")}</option>
-                            <option value="high">{t("localQualityHigh")}</option>
-                            <option value="good">{t("localQualityGood")}</option>
-                            <option value="medium">{t("localQualityMedium")}</option>
-                            <option value="low">{t("localQualityLow")}</option>
-                            <option value="unknown">{t("audioQualityFilterUnknown")}</option>
-                          </select>
-                        </label>
-                      ) : null}
-                      <button type="button" className="filter-reset" onClick={clearTrackFilters}>
-                        {t("clearFilters")}
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {isActionsMenuOpen ? (
-                    <div className="actions-menu">
-                      <h4>{t("actionsTitle")}</h4>
-                      <button
-                        type="button"
-                        className="filter-reset"
-                        onClick={refreshSelectedPlaylistDetails}
-                        disabled={refreshingPlaylistDetails || runningGlobalAudioAnalysis}
-                      >
-                        {refreshingPlaylistDetails ? t("playlistRefreshRunning") : t("playlistRefreshAction")}
-                      </button>
-                      {hasAvailableLocalFolder && !confirmGlobalAudioAnalysis ? (
-                        <button
-                          type="button"
-                          className="filter-reset"
-                          onClick={() => setConfirmGlobalAudioAnalysis(true)}
-                          disabled={runningGlobalAudioAnalysis}
-                        >
-                          {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisAction")}
-                        </button>
-                      ) : null}
-                      {hasAvailableLocalFolder && confirmGlobalAudioAnalysis ? (
-                        <>
-                          <p className="actions-disclaimer">{t("globalAudioAnalysisDisclaimer")}</p>
-                          <p className="actions-disclaimer">
-                            {t("globalAudioAnalysisEstimatePrefix")} {formatCount(analyzableTracksCount)} {t("tracksUnit")} : {formatEstimatedDuration(estimatedGlobalAnalysisSeconds)}
-                          </p>
-                          <label className="setting-toggle actions-option">
-                            <input
-                              type="checkbox"
-                              checked={overwriteExistingGlobalAnalysis}
-                              onChange={(event) => setOverwriteExistingGlobalAnalysis(event.currentTarget.checked)}
-                              disabled={runningGlobalAudioAnalysis}
-                            />
-                            <span>{t("globalAudioAnalysisOverwrite")}</span>
-                          </label>
-                          <div className="actions">
-                            <button
-                              type="button"
-                              className="filter-reset"
-                              onClick={confirmAndRunGlobalPlaylistAudioAnalysis}
-                              disabled={runningGlobalAudioAnalysis}
-                            >
-                              {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisConfirm")}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setConfirmGlobalAudioAnalysis(false);
-                                setOverwriteExistingGlobalAnalysis(false);
-                              }}
-                              disabled={runningGlobalAudioAnalysis}
-                            >
-                              {t("globalAudioAnalysisCancel")}
-                            </button>
-                          </div>
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    onClick={playlistFolderPath ? dissociateFolder : selectFolderAndScan}
-                    disabled={loadingPlaylistFolder || scanningLocalFiles}
-                  >
-                    {scanningLocalFiles
-                      ? t("localScanRunning")
-                      : playlistFolderPath
-                        ? t("localUnlinkButton")
-                        : t("localScanButton")}
-                  </button>
-                </div>
-              </div>
-
-              {selectedPlaylistDetails.tracks.length === 0 ? (
-                <p>{t("noTrackInPlaylist")}</p>
-              ) : null}
-
-              {selectedPlaylistDetails.tracks.length > 0 && filteredTracks.length === 0 ? (
-                <p>{t("noTrackAfterFilter")}</p>
-              ) : null}
-
-              {selectedPlaylistDetails.tracks.length > 0 && filteredTracks.length > 0 && trackViewMode === "list" ? (
-                <ul className="track-list">
-                  {filteredTracks.map((track) => (
-                    <li
-                      key={track.id}
-                      className="track-item"
-                      onClick={() => openTrackInfo(track)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openTrackInfo(track);
-                        }
-                      }}
-                    >
-                      {track.artwork_url ? (
-                        <img src={track.artwork_url} alt={track.title} className="track-cover" />
-                      ) : (
-                        <div className="track-cover placeholder">SC</div>
-                      )}
-                      <div className="track-main">
-                        <strong>{track.title}</strong>
-                        <p>{track.artist ?? t("unknownArtist")}</p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              {selectedPlaylistDetails.tracks.length > 0 && filteredTracks.length > 0 && trackViewMode === "icons" ? (
-                <ul className="track-icon-grid">
-                  {filteredTracks.map((track) => (
-                    <li key={track.id} className="track-icon-item">
-                      <button
-                        type="button"
-                        className="track-icon-btn"
-                        onClick={() => openTrackInfo(track)}
-                        title={track.title}
-                        aria-label={track.title}
-                      >
-                        {track.artwork_url ? (
-                          <img src={track.artwork_url} alt={track.title} className="track-icon-cover" />
-                        ) : (
-                          <div className="track-icon-cover placeholder">SC</div>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              </section>
+              <PlaylistDetailsView
+                t={t}
+                selectedPlaylistDetails={selectedPlaylistDetails}
+                filteredTracks={filteredTracks}
+                playlistFolderPath={playlistFolderPath}
+                playlistFolderAvailable={playlistFolderAvailable}
+                loadingPlaylistFolder={asyncState.loadingPlaylistFolder}
+                scanningLocalFiles={asyncState.scanningLocalFiles}
+                refreshingPlaylistDetails={asyncState.refreshingPlaylistDetails}
+                runningGlobalAudioAnalysis={asyncState.runningGlobalAudioAnalysis}
+                confirmGlobalAudioAnalysis={confirmGlobalAudioAnalysis}
+                overwriteExistingGlobalAnalysis={overwriteExistingGlobalAnalysis}
+                hasAvailableLocalFolder={hasAvailableLocalFolder}
+                analyzableTracksCount={analyzableTracksCount}
+                estimatedGlobalAnalysisSeconds={estimatedGlobalAnalysisSeconds}
+                activeFilterCount={activeFilterCount}
+                hasActiveTrackFilters={hasActiveTrackFilters}
+                isFilterMenuOpen={isFilterMenuOpen}
+                isActionsMenuOpen={isActionsMenuOpen}
+                trackSortOrder={trackSortOrder}
+                downloadSourceFilter={downloadSourceFilter}
+                localDownloadFilter={localDownloadFilter}
+                audioQualityFilter={audioQualityFilter}
+                trackViewMode={trackViewMode}
+                sectionControlsRef={sectionControlsRef}
+                onClosePlaylistDetails={closePlaylistDetails}
+                onRefreshFolderAssociation={() => {
+                  loadPlaylistLocalFolderAssociation(selectedPlaylistDetails.id).catch((error) => {
+                    setStatus(`${t("statusPlaylistError")}: ${String(error)}`);
+                  });
+                }}
+                onToggleTrackViewMode={() => setTrackViewMode((current) => (current === "list" ? "icons" : "list"))}
+                onToggleFilterMenu={() => {
+                  setIsActionsMenuOpen(false);
+                  setConfirmGlobalAudioAnalysis(false);
+                  setOverwriteExistingGlobalAnalysis(false);
+                  setIsFilterMenuOpen((current) => !current);
+                }}
+                onToggleActionsMenu={() => {
+                  setIsFilterMenuOpen(false);
+                  setConfirmGlobalAudioAnalysis(false);
+                  setOverwriteExistingGlobalAnalysis(false);
+                  setIsActionsMenuOpen((current) => !current);
+                }}
+                setTrackSortOrder={(value) => setTrackSortOrder(value)}
+                setDownloadSourceFilter={(value) => setDownloadSourceFilter(value)}
+                setLocalDownloadFilter={(value) => setLocalDownloadFilter(value)}
+                setAudioQualityFilter={(value) => setAudioQualityFilter(value)}
+                onClearTrackFilters={clearTrackFilters}
+                onRefreshSelectedPlaylistDetails={() => {
+                  refreshSelectedPlaylistDetails().catch((error) => {
+                    setStatus(`${t("statusPlaylistError")}: ${String(error)}`);
+                  });
+                }}
+                onStartConfirmGlobalAudioAnalysis={() => setConfirmGlobalAudioAnalysis(true)}
+                onSetOverwriteExistingGlobalAnalysis={(value) => setOverwriteExistingGlobalAnalysis(value)}
+                onConfirmAndRunGlobalPlaylistAudioAnalysis={() => {
+                  confirmAndRunGlobalPlaylistAudioAnalysis().catch((error) => {
+                    setStatus(`${t("globalAudioAnalysisError")}: ${String(error)}`);
+                  });
+                }}
+                onCancelGlobalAudioAnalysis={() => {
+                  setConfirmGlobalAudioAnalysis(false);
+                  setOverwriteExistingGlobalAnalysis(false);
+                }}
+                onToggleFolderScan={() => {
+                  const action = playlistFolderPath ? dissociateFolder : selectFolderAndScan;
+                  action().catch((error) => {
+                    setStatus(`${t("statusPlaylistError")}: ${String(error)}`);
+                  });
+                }}
+                onOpenTrackInfo={openTrackInfo}
+                formatCount={formatCount}
+                formatEstimatedDuration={formatEstimatedDuration}
+              />
 
               {selectedTrackInfo ? (
-              <aside className="track-panel open">
-                  <div className="track-panel-content">
-                    <section className="track-panel-actions-card">
-                      <h3>{t("utilitiesTitle")}</h3>
-                      <div className="panel-actions">
-                        <button
-                          type="button"
-                          disabled={!selectedTrackInfo.permalink_url}
-                          onClick={() => {
-                            if (selectedTrackInfo.permalink_url) {
-                              openUrl(selectedTrackInfo.permalink_url);
-                            }
-                          }}
-                        >
-                          {t("openOnSoundcloud")}
-                        </button>
-
-                        {selectedTrackInfo.associated_url ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const associatedUrl = selectedTrackInfo.associated_url;
-                              if (associatedUrl) {
-                                openUrl(associatedUrl);
-                              }
-                            }}
-                          >
-                            {getAssociatedButtonLabel(selectedTrackInfo.associated_url)}
-                          </button>
-                        ) : null}
-
-                        {canDownloadSelectedTrackFromHypeddit ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowHypedditDownloadMenu((current) => !current);
-                              if (showHypedditDownloadMenu) {
-                                setOverwriteExistingHypedditDownload(false);
-                              }
-                            }}
-                            disabled={downloadingFromHypeddit}
-                          >
-                            {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
-                          </button>
-                        ) : null}
-
-                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
-                          <button
-                            type="button"
-                            onClick={revealSelectedTrackLocalFileInExplorer}
-                          >
-                            {t("localRevealFileButton")}
-                          </button>
-                        ) : null}
-
-                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
-                          <button
-                            type="button"
-                            onClick={embedSelectedTrackCoverIntoLocalMp3}
-                            disabled={embeddingLocalCover}
-                          >
-                            {embeddingLocalCover ? t("localEmbedCoverRunning") : t("localEmbedCoverButton")}
-                          </button>
-                        ) : null}
-
-                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
-                          <button
-                            type="button"
-                            onClick={exportSelectedTrackSpectrogram}
-                            disabled={exportingSpectrogram}
-                          >
-                            {exportingSpectrogram ? t("localSpectrogramExportRunning") : t("localSpectrogramExportButton")}
-                          </button>
-                        ) : null}
-
-                        {hasAvailableLocalFolder && selectedTrackInfo.local_file ? (
-                          <button
-                            type="button"
-                            onClick={dissociateLocalFileFromSelectedTrack}
-                            disabled={dissociatingLocalFile}
-                          >
-                            {dissociatingLocalFile ? t("localDissociateRunning") : t("localDissociateButton")}
-                          </button>
-                        ) : null}
-                      </div>
-
-                      {canDownloadSelectedTrackFromHypeddit && showHypedditDownloadMenu ? (
-                        <div className="panel-actions hypeddit-download-menu">
-                          {selectedTrackInfo.local_file ? (
-                            <label className="setting-toggle actions-option">
-                              <input
-                                type="checkbox"
-                                checked={overwriteExistingHypedditDownload}
-                                onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
-                                disabled={downloadingFromHypeddit}
-                              />
-                              <span>{t("hypedditDownloadOverwriteLabel")}</span>
-                            </label>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={downloadSelectedTrackFromHypeddit}
-                            disabled={!canDownloadSelectedTrackFromHypeddit || downloadingFromHypeddit}
-                          >
-                            {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadConfirm")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowHypedditDownloadMenu(false);
-                              setOverwriteExistingHypedditDownload(false);
-                            }}
-                            disabled={downloadingFromHypeddit}
-                          >
-                            {t("globalAudioAnalysisCancel")}
-                          </button>
-                          {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
-                        </div>
-                      ) : null}
-
-                      {availableMoveTargetPlaylists.length > 0 ? (
-                        <div className="panel-actions move-track-controls">
-                          <select
-                            value={targetPlaylistIdForMove}
-                            onChange={(event) => setTargetPlaylistIdForMove(Number(event.currentTarget.value))}
-                            aria-label={t("moveTrackToPlaylistLabel")}
-                            disabled={movingTrackBetweenPlaylists}
-                          >
-                            {availableMoveTargetPlaylists.map((playlist) => (
-                              <option key={playlist.id} value={playlist.id}>
-                                {playlist.title}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={moveSelectedTrackToAnotherPlaylist}
-                            disabled={movingTrackBetweenPlaylists || targetPlaylistIdForMove === ""}
-                          >
-                            {movingTrackBetweenPlaylists ? t("moveTrackRunning") : t("moveTrackButton")}
-                          </button>
-                        </div>
-                      ) : (
-                        <p className="spectrogram-preview-meta">{t("moveTrackNoCompatibleTarget")}</p>
-                      )}
-                    </section>
-
-                    {hasAvailableLocalFolder ? (
-                      <section className="track-panel-actions-card">
-                        <h3>{t("localSpectrogramPreviewTitle")}</h3>
-                        <div className="panel-actions">
-                          <button
-                            type="button"
-                            onClick={generateSpectrogramPreview}
-                            disabled={!selectedTrackInfo.local_file || loadingSpectrogramPreview}
-                          >
-                            {loadingSpectrogramPreview ? t("localSpectrogramPreviewLoading") : t("localSpectrogramPreviewLoadButton")}
-                          </button>
-                          <input
-                            type="number"
-                            min={1}
-                            step={100}
-                            value={manualCutoffInputHz}
-                            onChange={(event) => setManualCutoffInputHz(event.currentTarget.value)}
-                            placeholder={t("localSpectrogramManualPlaceholder")}
-                            aria-label={t("localSpectrogramManualLabel")}
-                          />
-                          <button
-                            type="button"
-                            onClick={saveManualCutoff}
-                            disabled={!selectedTrackInfo.local_file || savingManualCutoff}
-                          >
-                            {savingManualCutoff ? t("localSpectrogramManualSaving") : t("localSpectrogramManualApply")}
-                          </button>
-                        </div>
-                        {!loadingSpectrogramPreview && spectrogramPreview ? (
-                          <>
-                            <img src={spectrogramPreview.image_data_url} alt="Spectrogram preview" className="spectrogram-preview-image" />
-                            <p className="spectrogram-preview-meta">
-                              <strong>{t("localSpectrogramCutoffLabel")}:</strong>{" "}
-                              {formatFrequency(spectrogramPreview.estimated_cutoff_hz ?? undefined)}
-                            </p>
-                            <p className="spectrogram-preview-meta">{t("localSpectrogramCutoffDisclaimer")}</p>
-                          </>
-                        ) : null}
-                      </section>
-                    ) : null}
-
-                    <div className="track-panel-grid">
-                      <section className="track-panel-section">
-                        <div className="panel-head">
-                          <h3>{t("trackInfos")}</h3>
-                        </div>
-
-                        {resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ? (
-                          <img
-                            src={resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? undefined}
-                            alt={selectedTrackInfo.title}
-                            className="panel-cover"
-                          />
-                        ) : (
-                          <div className="panel-cover placeholder">SC</div>
-                        )}
-
-                        <div className="panel-details">
-                          <p><strong>{t("titleLabel")}:</strong> {selectedTrackInfo.title}</p>
-                          <p><strong>{t("artistLabel")}:</strong> {formatText(selectedTrackInfo.artist)}</p>
-                          <p className="panel-duration-row"><strong>{t("durationLabel")}:</strong> {formatDuration(selectedTrackInfo.duration_ms)}</p>
-                          <p><strong>{t("genreLabel")}:</strong> {formatText(selectedTrackInfo.genre)}</p>
-                          <p><strong>{t("playsLabel")}:</strong> {formatCount(selectedTrackInfo.playback_count)}</p>
-                          <p><strong>{t("releaseDateLabel")}:</strong> {formatDate(selectedTrackInfo.release_date ?? selectedTrackInfo.created_at)}</p>
-                        </div>
-                      </section>
-
-                      {hasAvailableLocalFolder ? (
-                        <section className="track-panel-section">
-                          <div className="panel-head">
-                            <h3>{t("localFileTitle")}</h3>
-                          </div>
-                          {selectedTrackInfo.local_file ? (
-                            <>
-                              {selectedTrackInfo.local_file.local_cover_data_url ? (
-                                <img
-                                  src={selectedTrackInfo.local_file.local_cover_data_url}
-                                  alt={selectedTrackInfo.local_file.local_title ?? selectedTrackInfo.local_file.file_name}
-                                  className="panel-cover"
-                                />
-                              ) : (
-                                <div className="panel-cover placeholder">FILE</div>
-                              )}
-
-                              <div className="panel-details">
-                                <p><strong>{t("titleLabel")}:</strong> {formatText(selectedTrackInfo.local_file.local_title ?? selectedTrackInfo.local_file.file_name)}</p>
-                                <p><strong>{t("artistLabel")}:</strong> {formatText(selectedTrackInfo.local_file.local_artist)}</p>
-                                <p className="panel-duration-row"><strong>{t("durationLabel")}:</strong> {formatDurationFromSeconds(selectedTrackInfo.local_file.local_duration_seconds)}</p>
-                                <p><strong>{t("localFormatLabel")}:</strong> {formatText(selectedTrackInfo.local_file.local_format)}</p>
-                                <p><strong>{t("localBitrateLabel")}:</strong> {formatBitrate(selectedTrackInfo.local_file.local_bitrate_kbps)}</p>
-                                <p><strong>{t("localQualityLabel")}:</strong> {formatQuality(selectedTrackInfo.local_file.local_quality_label)}</p>
-                                <p><strong>{t("localMaxFrequencyLabel")}:</strong> {formatFrequency(selectedTrackInfo.local_file.local_max_frequency_hz)}</p>
-                                <p><strong>{t("localSampleRateLabel")}:</strong> {selectedTrackInfo.local_file.local_sample_rate_hz ? `${formatCount(selectedTrackInfo.local_file.local_sample_rate_hz)} Hz` : "—"}</p>
-                                <p><strong>{t("localChannelsLabel")}:</strong> {formatCount(selectedTrackInfo.local_file.local_channels)}</p>
-                                <p><strong>{t("fileSizeLabel")}:</strong> {formatFileSize(selectedTrackInfo.local_file.file_size_bytes)}</p>
-                                <p><strong>{t("localFilePathLabel")}:</strong> {formatText(selectedTrackInfo.local_file.file_path)}</p>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="panel-details">
-                              <p>{t("localFilePlaceholder")}</p>
-                              <button
-                                type="button"
-                                onClick={associateLocalFileToSelectedTrack}
-                                disabled={associatingLocalFile}
-                              >
-                                {associatingLocalFile ? t("localAssociateRunning") : t("localAssociateButton")}
-                              </button>
-                            </div>
-                          )}
-                        </section>
-                      ) : null}
-                    </div>
-                  </div>
-              </aside>
+                <TrackPanel
+                  t={t}
+                  selectedTrackInfo={selectedTrackInfo}
+                  hasAvailableLocalFolder={hasAvailableLocalFolder}
+                  canDownloadSelectedTrackFromHypeddit={canDownloadSelectedTrackFromHypeddit}
+                  showHypedditDownloadMenu={showHypedditDownloadMenu}
+                  setShowHypedditDownloadMenu={setShowHypedditDownloadMenu}
+                  overwriteExistingHypedditDownload={overwriteExistingHypedditDownload}
+                  setOverwriteExistingHypedditDownload={setOverwriteExistingHypedditDownload}
+                  hypedditDownloadPhase={hypedditDownloadPhase}
+                  availableMoveTargetPlaylists={availableMoveTargetPlaylists}
+                  targetPlaylistIdForMove={targetPlaylistIdForMove}
+                  setTargetPlaylistIdForMove={(value) => setTargetPlaylistIdForMove(value)}
+                  movingTrackBetweenPlaylists={asyncState.movingTrackBetweenPlaylists}
+                  associatingLocalFile={asyncState.associatingLocalFile}
+                  embeddingLocalCover={asyncState.embeddingLocalCover}
+                  exportingSpectrogram={asyncState.exportingSpectrogram}
+                  dissociatingLocalFile={asyncState.dissociatingLocalFile}
+                  downloadingFromHypeddit={asyncState.downloadingFromHypeddit}
+                  loadingSpectrogramPreview={asyncState.loadingSpectrogramPreview}
+                  savingManualCutoff={asyncState.savingManualCutoff}
+                  manualCutoffInputHz={manualCutoffInputHz}
+                  setManualCutoffInputHz={setManualCutoffInputHz}
+                  spectrogramPreview={spectrogramPreview}
+                  onOpenSoundcloud={() => {
+                    if (selectedTrackInfo.permalink_url) {
+                      void openUrl(selectedTrackInfo.permalink_url);
+                    }
+                  }}
+                  onOpenAssociatedUrl={() => {
+                    if (selectedTrackInfo.associated_url) {
+                      void openUrl(selectedTrackInfo.associated_url);
+                    }
+                  }}
+                  onRevealLocalFile={() => {
+                    revealSelectedTrackLocalFileInExplorer().catch((error) => {
+                      setStatus(`${t("localRevealFileError")}: ${String(error)}`);
+                    });
+                  }}
+                  onEmbedLocalCover={() => {
+                    embedSelectedTrackCoverIntoLocalMp3().catch((error) => {
+                      setStatus(`${t("localEmbedCoverError")}: ${String(error)}`);
+                    });
+                  }}
+                  onExportSpectrogram={() => {
+                    exportSelectedTrackSpectrogram().catch((error) => {
+                      setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
+                    });
+                  }}
+                  onDissociateLocalFile={() => {
+                    dissociateLocalFileFromSelectedTrack().catch((error) => {
+                      setStatus(`${t("localDissociateError")}: ${String(error)}`);
+                    });
+                  }}
+                  onAssociateLocalFile={() => {
+                    associateLocalFileToSelectedTrack().catch((error) => {
+                      setStatus(`${t("localAssociateError")}: ${String(error)}`);
+                    });
+                  }}
+                  onDownloadFromHypeddit={() => {
+                    downloadSelectedTrackFromHypeddit().catch((error) => {
+                      setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
+                    });
+                  }}
+                  onMoveTrack={() => {
+                    moveSelectedTrackToAnotherPlaylist().catch((error) => {
+                      setStatus(`${t("moveTrackError")}: ${String(error)}`);
+                    });
+                  }}
+                  onGenerateSpectrogramPreview={() => {
+                    generateSpectrogramPreview().catch((error) => {
+                      setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
+                    });
+                  }}
+                  onSaveManualCutoff={() => {
+                    saveManualCutoff().catch((error) => {
+                      setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
+                    });
+                  }}
+                  getAssociatedButtonLabel={getAssociatedButtonLabel}
+                  getHypedditProgressLabel={getHypedditProgressLabel}
+                  resolvePanelArtworkUrl={resolvePanelArtworkUrl}
+                  formatFrequency={formatFrequency}
+                  formatDuration={formatDuration}
+                  formatText={formatText}
+                  formatCount={formatCount}
+                  formatDate={formatDate}
+                  formatDurationFromSeconds={formatDurationFromSeconds}
+                  formatBitrate={formatBitrate}
+                  formatQuality={formatQuality}
+                  formatFileSize={formatFileSize}
+                />
               ) : null}
             </div>
           )}
         </section>
       ) : (
         <section className="card" ref={(element) => { cardScrollRef.current = element; }}>
-          <h2>{t("settingsTitle")}</h2>
-
-          <h3>{t("interfaceTitle")}</h3>
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={themeMode === "dark"}
-              onChange={(event) => onThemeChange(event.currentTarget.checked ? "dark" : "light")}
-            />
-            <span>{t("darkModeEnabled")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("coverQualityLabel")}</span>
-            <select
-              value={panelCoverQuality}
-              onChange={(event) => onPanelCoverQualityChange(event.currentTarget.value as CoverQuality)}
-            >
-              <option value="large">{t("qualityStandard")}</option>
-              <option value="t300x300">{t("quality300")}</option>
-              <option value="t500x500">{t("quality500")}</option>
-              <option value="original">{t("qualityOriginal")}</option>
-            </select>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("languageLabel")}</span>
-            <select
-              value={language}
-              onChange={(event) => onLanguageChange(event.currentTarget.value as Language)}
-            >
-              <option value="fr">{t("languageFrench")}</option>
-              <option value="en">{t("languageEnglish")}</option>
-            </select>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("playlistCoverModeLabel")}</span>
-            <select
-              value={playlistCoverMode}
-              onChange={(event) => savePlaylistCoverMode(event.currentTarget.value as PlaylistCoverMode)}
-              disabled={savingPlaylistCoverMode}
-            >
-              <option value="first">{t("playlistCoverModeFirst")}</option>
-              <option value="random">{t("playlistCoverModeRandom")}</option>
-            </select>
-          </label>
-          <p className="playlist-cover-mode-hint">{t("playlistCoverModeHint")}</p>
-
-          <h3>{t("analysisSettingsTitle")}</h3>
-          <label className="setting-toggle auth-actions">
-            <span>{t("spectrogramScopeLabel")}</span>
-            <select
-              value={spectrogramAnalysisScope}
-              onChange={(event) => onSpectrogramAnalysisScopeChange(event.currentTarget.value as SpectrogramAnalysisScope)}
-            >
-              <option value="quarter">{t("spectrogramScopeQuarter")}</option>
-              <option value="half">{t("spectrogramScopeHalf")}</option>
-              <option value="full">{t("spectrogramScopeFull")}</option>
-            </select>
-          </label>
-
-          <h3>{t("downloadSettingsTitle")}</h3>
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={downloadEmbedCover}
-              onChange={(event) => saveDownloadEmbedCover(event.currentTarget.checked)}
-            />
-            <span>{t("downloadEmbedCoverSetting")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={downloadRenameWithSoundcloudTitle}
-              onChange={(event) => saveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
-            />
-            <span>{t("downloadRenameSetting")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={hypedditDownloadHeadless}
-              onChange={(event) => saveHypedditDownloadHeadless(event.currentTarget.checked)}
-            />
-            <span>{t("downloadHypedditHeadlessSetting")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("downloadHypedditCommentLabel")}</span>
-            <input
-              type="text"
-              value={hypedditDownloadComment}
-              placeholder={t("downloadHypedditCommentPlaceholder")}
-              onChange={(event) => setHypedditDownloadComment(event.currentTarget.value)}
-              onBlur={() => { void saveHypedditDownloadComment(hypedditDownloadComment); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void saveHypedditDownloadComment(hypedditDownloadComment);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("downloadHypedditNameLabel")}</span>
-            <input
-              type="text"
-              value={hypedditDownloadName}
-              placeholder={t("downloadHypedditNamePlaceholder")}
-              onChange={(event) => setHypedditDownloadName(event.currentTarget.value)}
-              onBlur={() => { void saveHypedditDownloadName(hypedditDownloadName); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void saveHypedditDownloadName(hypedditDownloadName);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <span>{t("downloadHypedditEmailLabel")}</span>
-            <input
-              type="email"
-              value={hypedditDownloadEmail}
-              placeholder={t("downloadHypedditEmailPlaceholder")}
-              onChange={(event) => setHypedditDownloadEmail(event.currentTarget.value)}
-              onBlur={() => { void saveHypedditDownloadEmail(hypedditDownloadEmail); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void saveHypedditDownloadEmail(hypedditDownloadEmail);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-          </label>
-
-          <h3>{t("connectionsTitle")}</h3>
-
-          <div className="actions auth-actions">
-            <button type="button" onClick={connectSoundCloud} disabled={connecting}>
-              {connecting ? t("connectingSoundcloud") : t("connectSoundcloud")}
-            </button>
-            {configStatus?.connected ? <span className="badge public">{t("connected")}</span> : <span className="badge private">{t("notConnected")}</span>}
-          </div>
-
-          <div className="actions auth-actions">
-            <button type="button" onClick={connectSpotify} disabled={connectingSpotify}>
-              {connectingSpotify ? t("connectingSpotify") : t("connectSpotify")}
-            </button>
-            {spotifyStatus?.connected ? <span className="badge public">{t("connected")}</span> : <span className="badge private">{t("notConnected")}</span>}
-          </div>
-
-          <h3>{t("debugTitle")}</h3>
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={debugSettings.soundcloud_fallback_headless}
-              onChange={(event) => saveFallbackHeadless(event.currentTarget.checked)}
-            />
-            <span>{t("headlessEnabled")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={debugSettings.logs_enabled}
-              onChange={(event) => saveLogsEnabled(event.currentTarget.checked)}
-            />
-            <span>{t("logsEnabled")}</span>
-          </label>
+          <SettingsView
+            t={t}
+            themeMode={themeMode}
+            panelCoverQuality={panelCoverQuality}
+            language={language}
+            playlistCoverMode={playlistCoverMode}
+            savingPlaylistCoverMode={asyncState.savingPlaylistCoverMode}
+            spectrogramAnalysisScope={spectrogramAnalysisScope}
+            downloadEmbedCover={downloadEmbedCover}
+            downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
+            hypedditDownloadHeadless={hypedditDownloadHeadless}
+            hypedditDownloadComment={hypedditDownloadComment}
+            setHypedditDownloadComment={setHypedditDownloadComment}
+            hypedditDownloadName={hypedditDownloadName}
+            setHypedditDownloadName={setHypedditDownloadName}
+            hypedditDownloadEmail={hypedditDownloadEmail}
+            setHypedditDownloadEmail={setHypedditDownloadEmail}
+            connecting={asyncState.connecting}
+            connectingSpotify={asyncState.connectingSpotify}
+            configStatus={configStatus}
+            spotifyStatus={spotifyStatus}
+            debugSettings={debugSettings}
+            onThemeChange={onThemeChange}
+            onPanelCoverQualityChange={onPanelCoverQualityChange}
+            onLanguageChange={onLanguageChange}
+            onSavePlaylistCoverMode={(mode) => {
+              savePlaylistCoverMode(mode).catch((error) => {
+                setStatus(`${t("statusPlaylistCoverModeError")}: ${String(error)}`);
+              });
+            }}
+            onSpectrogramAnalysisScopeChange={onSpectrogramAnalysisScopeChange}
+            onSaveDownloadEmbedCover={(enabled) => {
+              saveDownloadEmbedCover(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveDownloadRenameWithSoundcloudTitle={(enabled) => {
+              saveDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditDownloadHeadless={(enabled) => {
+              saveHypedditDownloadHeadless(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditDownloadComment={() => {
+              saveHypedditDownloadComment(hypedditDownloadComment).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditDownloadName={() => {
+              saveHypedditDownloadName(hypedditDownloadName).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditDownloadEmail={() => {
+              saveHypedditDownloadEmail(hypedditDownloadEmail).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onConnectSoundCloud={() => {
+              connectSoundCloud().catch((error) => {
+                setStatus(`${t("statusAuthError")}: ${String(error)}`);
+              });
+            }}
+            onConnectSpotify={() => {
+              connectSpotify().catch((error) => {
+                setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
+              });
+            }}
+            onSaveFallbackHeadless={(enabled) => {
+              saveFallbackHeadless(enabled).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
+            onSaveLogsEnabled={(enabled) => {
+              saveLogsEnabled(enabled).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
+          />
         </section>
       )}
 
