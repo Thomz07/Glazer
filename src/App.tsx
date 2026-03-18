@@ -1529,7 +1529,7 @@ function App() {
   return (
     <main className="app">
       <header className="header">
-        <h1>Glazer — SoundCloud</h1>
+        <h1>Glazer</h1>
         <div className="tabs">
           <span
             className={isAnyLoading ? "header-loading-spinner active" : "header-loading-spinner"}
