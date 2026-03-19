@@ -4,7 +4,7 @@ use audiotags::Tag;
 use base64::Engine;
 use id3::frame::{Picture, PictureType};
 use id3::{TagLike, Version};
-use image::{ImageBuffer, Rgb};
+use image::{DynamicImage, ImageBuffer, Rgb};
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use mp3_duration;
@@ -49,15 +49,67 @@ pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), St
         return Err(format!("Téléchargement cover impossible (HTTP {})", response.status()));
     }
 
-    let mime_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .filter(|value| value.starts_with("image/"))
-        .unwrap_or("image/jpeg")
-        .to_string();
+    let image_bytes = response
+        .bytes()
+        .map_err(|error| format!("Lecture cover impossible: {error}"))?
+        .to_vec();
+
+    if image_bytes.is_empty() {
+        return Err("Cover vide".to_string());
+    }
+
+    // Rekordbox is more reliable with JPEG front cover frames and ID3v2.3.
+    let decoded_image: DynamicImage = image::load_from_memory(&image_bytes)
+        .map_err(|error| format!("Décodage cover impossible: {error}"))?;
+
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    decoded_image
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg_bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .map_err(|error| format!("Conversion cover JPEG impossible: {error}"))?;
+
+    if jpeg_bytes.is_empty() {
+        return Err("Conversion cover JPEG vide".to_string());
+    }
+
+    let mut tag = id3::Tag::read_from_path(source).unwrap_or_default();
+    tag.remove_all_pictures();
+    tag.add_frame(Picture {
+        mime_type: "image/jpeg".to_string(),
+        picture_type: PictureType::CoverFront,
+        description: String::new(),
+        data: jpeg_bytes,
+    });
+
+    tag.write_to_path(source, Version::Id3v23)
+        .map_err(|error| format!("Écriture tag MP3 impossible: {error}"))
+}
+
+pub fn download_cover_as_jpeg(artwork_url: &str, output_path: &str) -> Result<String, String> {
+    let destination = Path::new(output_path);
+    if output_path.trim().is_empty() {
+        return Err("Chemin de destination vide".to_string());
+    }
+
+    let parent_dir = destination
+        .parent()
+        .ok_or_else(|| "Dossier de destination introuvable".to_string())?;
+    if !parent_dir.exists() {
+        return Err(format!("Dossier de destination introuvable: {}", parent_dir.display()));
+    }
+
+    let cover_url = artwork_url.trim();
+    if cover_url.is_empty() {
+        return Err("URL de cover manquante".to_string());
+    }
+
+    let response = reqwest::blocking::get(cover_url)
+        .map_err(|error| format!("Téléchargement cover impossible: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Téléchargement cover impossible (HTTP {})", response.status()));
+    }
 
     let image_bytes = response
         .bytes()
@@ -68,17 +120,25 @@ pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), St
         return Err("Cover vide".to_string());
     }
 
-    let mut tag = id3::Tag::read_from_path(source).unwrap_or_default();
-    tag.remove_all_pictures();
-    tag.add_frame(Picture {
-        mime_type,
-        picture_type: PictureType::CoverFront,
-        description: String::new(),
-        data: image_bytes,
-    });
+    let decoded_image: DynamicImage = image::load_from_memory(&image_bytes)
+        .map_err(|error| format!("Décodage cover impossible: {error}"))?;
 
-    tag.write_to_path(source, Version::Id3v24)
-        .map_err(|error| format!("Écriture tag MP3 impossible: {error}"))
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    decoded_image
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg_bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .map_err(|error| format!("Conversion cover JPEG impossible: {error}"))?;
+
+    if jpeg_bytes.is_empty() {
+        return Err("Conversion cover JPEG vide".to_string());
+    }
+
+    std::fs::write(destination, jpeg_bytes)
+        .map_err(|error| format!("Écriture du fichier cover impossible: {error}"))?;
+
+    Ok(destination.to_string_lossy().to_string())
 }
 
 #[derive(Debug, Clone)]

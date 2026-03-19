@@ -34,6 +34,7 @@ type PlaylistDetailsProps = {
   downloadSourceFilter: DownloadSourceFilter;
   localDownloadFilter: LocalDownloadFilter;
   audioQualityFilter: AudioQualityFilter;
+  trackSearchQuery: string;
   trackViewMode: TrackViewMode;
   sectionControlsRef: RefObject<HTMLDivElement | null>;
   onClosePlaylistDetails: () => void;
@@ -45,6 +46,7 @@ type PlaylistDetailsProps = {
   setDownloadSourceFilter: (value: DownloadSourceFilter) => void;
   setLocalDownloadFilter: (value: LocalDownloadFilter) => void;
   setAudioQualityFilter: (value: AudioQualityFilter) => void;
+  setTrackSearchQuery: (value: string) => void;
   onClearTrackFilters: () => void;
   onRefreshSelectedPlaylistDetails: () => void;
   onStartConfirmGlobalAudioAnalysis: () => void;
@@ -81,6 +83,7 @@ export function PlaylistDetailsView({
   downloadSourceFilter,
   localDownloadFilter,
   audioQualityFilter,
+  trackSearchQuery,
   trackViewMode,
   sectionControlsRef,
   onClosePlaylistDetails,
@@ -92,6 +95,7 @@ export function PlaylistDetailsView({
   setDownloadSourceFilter,
   setLocalDownloadFilter,
   setAudioQualityFilter,
+  setTrackSearchQuery,
   onClearTrackFilters,
   onRefreshSelectedPlaylistDetails,
   onStartConfirmGlobalAudioAnalysis,
@@ -310,6 +314,27 @@ export function PlaylistDetailsView({
           </button>
         </div>
       </div>
+
+      {selectedPlaylistDetails.tracks.length > 0 ? (
+        <div className="track-search-row">
+          <input
+            type="search"
+            value={trackSearchQuery}
+            onChange={(event) => setTrackSearchQuery(event.currentTarget.value)}
+            placeholder={t("trackSearchPlaceholder")}
+            aria-label={t("trackSearchLabel")}
+          />
+          {trackSearchQuery.trim() ? (
+            <button
+              type="button"
+              className="track-search-clear-btn"
+              onClick={() => setTrackSearchQuery("")}
+            >
+              {t("clearSearch")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {selectedPlaylistDetails.tracks.length === 0 ? <p>{t("noTrackInPlaylist")}</p> : null}
 

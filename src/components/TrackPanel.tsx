@@ -24,6 +24,7 @@ type TrackPanelProps = {
   dissociatingLocalFile: boolean;
   associatingLocalFile: boolean;
   downloadingFromHypeddit: boolean;
+  downloadingCover: boolean;
   loadingSpectrogramPreview: boolean;
   savingManualCutoff: boolean;
   manualCutoffInputHz: string;
@@ -37,6 +38,7 @@ type TrackPanelProps = {
   onDissociateLocalFile: () => void;
   onAssociateLocalFile: () => void;
   onDownloadFromHypeddit: () => void;
+  onDownloadCover: () => void;
   onMoveTrack: () => void;
   onGenerateSpectrogramPreview: () => void;
   onSaveManualCutoff: () => void;
@@ -73,6 +75,7 @@ export function TrackPanel({
   dissociatingLocalFile,
   associatingLocalFile,
   downloadingFromHypeddit,
+  downloadingCover,
   loadingSpectrogramPreview,
   savingManualCutoff,
   manualCutoffInputHz,
@@ -86,6 +89,7 @@ export function TrackPanel({
   onDissociateLocalFile,
   onAssociateLocalFile,
   onDownloadFromHypeddit,
+  onDownloadCover,
   onMoveTrack,
   onGenerateSpectrogramPreview,
   onSaveManualCutoff,
@@ -122,6 +126,16 @@ export function TrackPanel({
                 onClick={onOpenAssociatedUrl}
               >
                 {getAssociatedButtonLabel(selectedTrackInfo.associated_url)}
+              </button>
+            ) : null}
+
+            {selectedTrackInfo.artwork_url ? (
+              <button
+                type="button"
+                onClick={onDownloadCover}
+                disabled={downloadingCover}
+              >
+                {downloadingCover ? t("coverDownloadRunning") : t("coverDownloadButton")}
               </button>
             ) : null}
 

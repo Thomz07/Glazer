@@ -119,6 +119,11 @@ struct HypedditDownloadResult {
     overwrote_existing: bool,
 }
 
+#[derive(Serialize)]
+struct CoverDownloadResult {
+    output_path: String,
+}
+
 #[derive(Serialize, Clone)]
 struct HypedditDownloadProgressPayload {
     phase: String,
@@ -664,6 +669,14 @@ fn embed_local_mp3_cover(file_path: String, artwork_url: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn download_track_cover(artwork_url: String, output_path: String) -> Result<CoverDownloadResult, String> {
+    let saved_path = local_files::download_cover_as_jpeg(artwork_url.trim(), output_path.trim())?;
+    Ok(CoverDownloadResult {
+        output_path: saved_path,
+    })
+}
+
+#[tauri::command]
 fn export_local_spectrogram_jpg(
     file_path: String,
     output_path: String,
@@ -1106,6 +1119,7 @@ pub fn run() {
             dissociate_playlist_track_local_file,
             move_track_between_playlists,
             embed_local_mp3_cover,
+            download_track_cover,
             export_local_spectrogram_jpg,
             generate_local_spectrogram_preview,
             delete_local_spectrogram_preview,

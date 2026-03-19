@@ -55,6 +55,7 @@ const ASYNC_KEYS = [
   "dissociatingLocalFile",
   "embeddingLocalCover",
   "downloadingFromHypeddit",
+  "downloadingCover",
   "exportingSpectrogram",
   "loadingSpectrogramPreview",
   "savingManualCutoff",
@@ -110,6 +111,7 @@ function App() {
   const [downloadSourceFilter, setDownloadSourceFilter] = useState<DownloadSourceFilter>("all");
   const [localDownloadFilter, setLocalDownloadFilter] = useState<LocalDownloadFilter>("all");
   const [audioQualityFilter, setAudioQualityFilter] = useState<AudioQualityFilter>("all");
+  const [trackSearchQuery, setTrackSearchQuery] = useState("");
   const [trackViewMode, setTrackViewMode] = useState<TrackViewMode>("list");
   const [spectrogramAnalysisScope, setSpectrogramAnalysisScope] = useState<SpectrogramAnalysisScope>("half");
   const [hypedditDownloadPhase, setHypedditDownloadPhase] = useState("");
@@ -823,6 +825,7 @@ function App() {
     setTrackSortOrder("original");
     setDownloadSourceFilter("all");
     setLocalDownloadFilter("all");
+    setTrackSearchQuery("");
     setTrackViewMode("list");
   }
 
@@ -1259,6 +1262,56 @@ function App() {
     }
   }
 
+  function sanitizeCoverFileStem(input: string) {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return "track";
+    }
+
+    const sanitized = trimmed
+      .replace(/[<>:"/\\|?*]+/g, "_")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return sanitized || "track";
+  }
+
+  async function downloadSelectedTrackCover() {
+    if (!selectedTrackInfo) {
+      return;
+    }
+
+    const artworkUrl = resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url;
+    if (!artworkUrl) {
+      setStatus(t("coverDownloadMissingArtwork"));
+      return;
+    }
+
+    try {
+      const defaultName = `${sanitizeCoverFileStem(selectedTrackInfo.title)}-cover.jpg`;
+      const selectedOutputPath = await saveDialog({
+        title: t("coverDownloadSaveTitle"),
+        defaultPath: defaultName,
+        filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
+      });
+
+      if (!selectedOutputPath || Array.isArray(selectedOutputPath)) {
+        return;
+      }
+
+      setAsyncState("downloadingCover", true);
+      const result = await invoke<{ output_path: string }>("download_track_cover", {
+        artworkUrl,
+        outputPath: selectedOutputPath,
+      });
+      setStatus(`${t("coverDownloadDone")}: ${result.output_path}`);
+    } catch (error) {
+      setStatus(`${t("coverDownloadError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("downloadingCover", false);
+    }
+  }
+
   async function refreshSelectedPlaylistDetails() {
     if (!selectedPlaylistDetails) {
       return;
@@ -1406,7 +1459,26 @@ function App() {
   }
 
   function getFilteredTracks(tracks: PlaylistTrack[]) {
+    const normalizedSearch = trackSearchQuery
+      .trim()
+      .toLocaleLowerCase(language === "fr" ? "fr" : "en")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
     const filtered = tracks.filter((track) => {
+      if (normalizedSearch) {
+        const searchTarget = [track.title, track.artist, track.genre]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join(" ")
+          .toLocaleLowerCase(language === "fr" ? "fr" : "en")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "");
+
+        if (!searchTarget.includes(normalizedSearch)) {
+          return false;
+        }
+      }
+
       if (downloadSourceFilter === "downloadable" && !track.associated_url) {
         return false;
       }
@@ -1742,6 +1814,7 @@ function App() {
                 downloadSourceFilter={downloadSourceFilter}
                 localDownloadFilter={localDownloadFilter}
                 audioQualityFilter={audioQualityFilter}
+                trackSearchQuery={trackSearchQuery}
                 trackViewMode={trackViewMode}
                 sectionControlsRef={sectionControlsRef}
                 onClosePlaylistDetails={closePlaylistDetails}
@@ -1767,6 +1840,7 @@ function App() {
                 setDownloadSourceFilter={(value) => setDownloadSourceFilter(value)}
                 setLocalDownloadFilter={(value) => setLocalDownloadFilter(value)}
                 setAudioQualityFilter={(value) => setAudioQualityFilter(value)}
+                setTrackSearchQuery={setTrackSearchQuery}
                 onClearTrackFilters={clearTrackFilters}
                 onRefreshSelectedPlaylistDetails={() => {
                   refreshSelectedPlaylistDetails().catch((error) => {
@@ -1815,6 +1889,7 @@ function App() {
                   exportingSpectrogram={asyncState.exportingSpectrogram}
                   dissociatingLocalFile={asyncState.dissociatingLocalFile}
                   downloadingFromHypeddit={asyncState.downloadingFromHypeddit}
+                  downloadingCover={asyncState.downloadingCover}
                   loadingSpectrogramPreview={asyncState.loadingSpectrogramPreview}
                   savingManualCutoff={asyncState.savingManualCutoff}
                   manualCutoffInputHz={manualCutoffInputHz}
@@ -1858,6 +1933,11 @@ function App() {
                   onDownloadFromHypeddit={() => {
                     downloadSelectedTrackFromHypeddit().catch((error) => {
                       setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
+                    });
+                  }}
+                  onDownloadCover={() => {
+                    downloadSelectedTrackCover().catch((error) => {
+                      setStatus(`${t("coverDownloadError")}: ${String(error)}`);
                     });
                   }}
                   onMoveTrack={() => {
