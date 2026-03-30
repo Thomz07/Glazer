@@ -44,6 +44,7 @@ struct MiscSettings {
     playlist_cover_mode: String,
     download_embed_cover: bool,
     download_rename_with_soundcloud_title: bool,
+    hypeddit_download_conversion_format: String,
     analysis_auto_apply_frequency_max: bool,
     hypeddit_download_headless: bool,
     hypeddit_download_comment: String,
@@ -927,6 +928,16 @@ fn download_hypeddit_track_to_local_folder(
         }
     }
 
+    let conversion_format = db::get_hypeddit_download_conversion_format(&state.db_path)?;
+    if let Some((converted_path, converted_name)) = local_files::convert_audio_file_with_ffmpeg(
+        result.file_path.as_str(),
+        conversion_format.as_str(),
+        overwrite_existing,
+    )? {
+        result.file_path = converted_path;
+        result.file_name = converted_name;
+    }
+
     let embed_cover = db::get_download_embed_cover(&state.db_path)?;
     if embed_cover {
         if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -975,14 +986,22 @@ fn reveal_local_file_in_explorer(file_path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("explorer")
-            .arg(format!("/select,{}", target_path.to_string_lossy()))
-            .status()
-            .map_err(|error| format!("Impossible d'ouvrir Explorer: {error}"))?;
-
-        if !status.success() {
-            return Err("Impossible de révéler le fichier dans Explorer.".to_string());
+        // Explorer does not reliably handle verbatim paths (\\?\...), normalize first.
+        let canonical_target = target_path
+            .canonicalize()
+            .unwrap_or_else(|_| target_path.clone());
+        let mut explorer_target = canonical_target.to_string_lossy().replace('/', "\\");
+        if let Some(stripped) = explorer_target.strip_prefix("\\\\?\\UNC\\") {
+            explorer_target = format!("\\\\{}", stripped);
+        } else if let Some(stripped) = explorer_target.strip_prefix("\\\\?\\") {
+            explorer_target = stripped.to_string();
         }
+
+        Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(explorer_target)
+            .spawn()
+            .map_err(|error| format!("Impossible d'ouvrir Explorer: {error}"))?;
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1029,6 +1048,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         download_rename_with_soundcloud_title: db::get_download_rename_with_soundcloud_title(
             &state.db_path,
         )?,
+        hypeddit_download_conversion_format: db::get_hypeddit_download_conversion_format(&state.db_path)?,
         analysis_auto_apply_frequency_max: db::get_analysis_auto_apply_frequency_max(&state.db_path)?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
@@ -1053,6 +1073,11 @@ fn set_download_rename_with_soundcloud_title(
     enabled: bool,
 ) -> Result<(), String> {
     db::set_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_hypeddit_download_conversion_format(state: State<AppState>, format: String) -> Result<(), String> {
+    db::set_hypeddit_download_conversion_format(&state.db_path, format.as_str())
 }
 
 #[tauri::command]
@@ -1134,6 +1159,7 @@ pub fn run() {
             set_playlist_cover_mode,
             set_download_embed_cover,
             set_download_rename_with_soundcloud_title,
+            set_hypeddit_download_conversion_format,
             set_analysis_auto_apply_frequency_max,
             set_hypeddit_download_headless,
             set_hypeddit_download_comment,

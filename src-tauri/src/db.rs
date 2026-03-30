@@ -3,7 +3,15 @@ use std::collections::HashSet;
 
 use rusqlite::{params, Connection};
 
-use crate::local_files::{analyze_file_cutoff_hz, extract_local_metadata_fast, is_supported_audio_file, normalize_soundcloud_url, quality_label_from_max_frequency, ScannedAudioFile};
+use crate::local_files::{
+    analyze_file_cutoff_hz,
+    extract_local_metadata_fast,
+    is_supported_audio_file,
+    normalize_soundcloud_url,
+    quality_label_from_max_frequency,
+    write_soundcloud_url_comment_tag,
+    ScannedAudioFile,
+};
 use crate::models::{LocalAudioFileInfo, Playlist, PlaylistTrack};
 
 pub struct PlaylistGlobalAudioAnalysisStats {
@@ -561,6 +569,45 @@ pub fn set_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) 
     Ok(())
 }
 
+pub fn get_hypeddit_download_conversion_format(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_conversion_format'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .filter(|item| matches!(item.as_str(), "original" | "mp3" | "wav" | "flac"))
+        .unwrap_or_else(|| "original".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_conversion_format(db_path: &Path, format: &str) -> Result<(), String> {
+    let normalized = format.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "original" | "mp3" | "wav" | "flac") {
+        return Err("Format de conversion Hypeddit invalide.".to_string());
+    }
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_conversion_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 pub fn get_analysis_auto_apply_frequency_max(db_path: &Path) -> Result<bool, String> {
     let connection = open_connection(db_path)?;
     let value = connection
@@ -953,6 +1000,8 @@ pub fn upsert_playlist_track_file_link_manual(
         .and_then(|value| value.to_str())
         .map(|value| value.to_string())
         .unwrap_or_else(|| trimmed_file_path.to_string());
+
+    write_soundcloud_url_comment_tag(trimmed_file_path, &normalized_url)?;
 
     let extracted = extract_local_metadata_fast(trimmed_file_path, Some(&file_name), file_size_bytes);
     let scanned_at = std::time::SystemTime::now()

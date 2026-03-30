@@ -1,8 +1,9 @@
 use std::path::Path;
+use std::process::Command;
 
 use audiotags::Tag;
 use base64::Engine;
-use id3::frame::{Picture, PictureType};
+use id3::frame::{Comment, Picture, PictureType};
 use id3::{TagLike, Version};
 use image::{DynamicImage, ImageBuffer, Rgb};
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
@@ -85,6 +86,112 @@ pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), St
 
     tag.write_to_path(source, Version::Id3v23)
         .map_err(|error| format!("Écriture tag MP3 impossible: {error}"))
+}
+
+pub fn write_soundcloud_url_comment_tag(file_path: &str, track_permalink_url: &str) -> Result<(), String> {
+    let source = Path::new(file_path);
+    if !source.exists() || !source.is_file() {
+        return Err(format!("Fichier audio introuvable: {file_path}"));
+    }
+
+    let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud invalide pour le tag commentaire.".to_string())?;
+
+    // Legacy compatibility target: the previous script reads COMM frames on MP3 files.
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if extension != "mp3" && extension != "wav" {
+        return Ok(());
+    }
+
+    let mut tag = id3::Tag::read_from_path(source).unwrap_or_default();
+    let _ = tag.remove("COMM");
+    tag.add_frame(Comment {
+        lang: "eng".to_string(),
+        description: "Comment".to_string(),
+        text: normalized_url,
+    });
+
+    tag.write_to_path(source, Version::Id3v23)
+        .map_err(|error| format!("Écriture du tag commentaire impossible: {error}"))
+}
+
+pub fn convert_audio_file_with_ffmpeg(
+    file_path: &str,
+    target_format: &str,
+    overwrite_existing: bool,
+) -> Result<Option<(String, String)>, String> {
+    let source = Path::new(file_path);
+    if !source.exists() || !source.is_file() {
+        return Err(format!("Fichier audio introuvable: {file_path}"));
+    }
+
+    let target = target_format.trim().to_ascii_lowercase();
+    if target.is_empty() || target == "original" {
+        return Ok(None);
+    }
+
+    let supported = ["mp3", "wav", "flac"];
+    if !supported.contains(&target.as_str()) {
+        return Err(format!("Format de conversion non supporte: {target}"));
+    }
+
+    let current_extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if current_extension == target {
+        return Ok(None);
+    }
+
+    let output_path = source.with_extension(&target);
+    if output_path.exists() {
+        if overwrite_existing {
+            std::fs::remove_file(&output_path)
+                .map_err(|error| format!("Impossible d'ecraser le fichier converti existant: {error}"))?;
+        } else {
+            return Err(format!(
+                "Un fichier converti existe deja: {}",
+                output_path.display()
+            ));
+        }
+    }
+
+    let status = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(source)
+        .arg(&output_path)
+        .status()
+        .map_err(|error| format!("Impossible de lancer ffmpeg: {error}"))?;
+
+    if !status.success() {
+        return Err("Conversion audio impossible via ffmpeg.".to_string());
+    }
+
+    if !output_path.exists() {
+        return Err("Le fichier converti est introuvable apres conversion.".to_string());
+    }
+
+    std::fs::remove_file(source)
+        .map_err(|error| format!("Impossible de supprimer le fichier source apres conversion: {error}"))?;
+
+    let converted_path = output_path.to_string_lossy().to_string();
+    let converted_name = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| converted_path.clone());
+
+    Ok(Some((converted_path, converted_name)))
 }
 
 pub fn download_cover_as_jpeg(artwork_url: &str, output_path: &str) -> Result<String, String> {

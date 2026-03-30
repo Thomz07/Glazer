@@ -85,11 +85,13 @@ export type DebugSettings = {
 };
 
 export type PlaylistCoverMode = "first" | "random";
+export type HypedditConversionFormat = "original" | "mp3" | "wav" | "flac";
 
 export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
   download_embed_cover?: boolean;
   download_rename_with_soundcloud_title?: boolean;
+  hypeddit_download_conversion_format?: HypedditConversionFormat;
   analysis_auto_apply_frequency_max?: boolean;
   hypeddit_download_headless?: boolean;
   hypeddit_download_comment?: string;

@@ -452,7 +452,7 @@ a {
 
 .settings-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 12px;
   margin: 6px 0 12px;
 }
@@ -965,6 +965,77 @@ a {
   flex-shrink: 0;
 }
 
+.centered-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(10, 12, 16, 0.52);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.centered-modal {
+  width: min(640px, calc(100vw - 36px));
+  max-height: calc(100vh - 44px);
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--surface-border);
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+  padding: 14px;
+}
+
+.centered-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.centered-modal-header h3 {
+  margin: 0;
+}
+
+.centered-modal-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.centered-modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.centered-modal-field select {
+  width: 100%;
+}
+
+.centered-modal-note {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.centered-modal-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #c47e24;
+  background: #fff4e6;
+  color: #6d3e00;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.centered-modal-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 :root[data-theme="dark"] {
   color: #f6f6f6;
   background-color: #2f2f2f;
@@ -1057,4 +1128,15 @@ a {
   border-color: #8a4a4a;
   background: #4a2c2c;
   color: #ffd7d7;
+}
+
+:root[data-theme="dark"] .centered-modal {
+  background: #2f2f2f;
+  border-color: #585858;
+}
+
+:root[data-theme="dark"] .centered-modal-warning {
+  border-color: #8b6228;
+  background: #4a3a24;
+  color: #f6ddb3;
 }

@@ -1,19 +1,23 @@
+import { useEffect, useState } from "react";
 import type { TranslationKey } from "../i18n";
 import type {
   Playlist,
   PlaylistTrack,
   SpectrogramPreviewResult,
 } from "../types";
+import { CenteredModal } from "./CenteredModal";
 
 type TrackPanelProps = {
   t: (key: TranslationKey) => string;
   selectedTrackInfo: PlaylistTrack;
   hasAvailableLocalFolder: boolean;
   canDownloadSelectedTrackFromHypeddit: boolean;
-  showHypedditDownloadMenu: boolean;
-  setShowHypedditDownloadMenu: (updater: (current: boolean) => boolean) => void;
   overwriteExistingHypedditDownload: boolean;
   setOverwriteExistingHypedditDownload: (value: boolean) => void;
+  downloadEmbedCover: boolean;
+  downloadRenameWithSoundcloudTitle: boolean;
+  onSaveDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   hypedditDownloadPhase: string;
   availableMoveTargetPlaylists: Playlist[];
   targetPlaylistIdForMove: number | "";
@@ -61,10 +65,12 @@ export function TrackPanel({
   selectedTrackInfo,
   hasAvailableLocalFolder,
   canDownloadSelectedTrackFromHypeddit,
-  showHypedditDownloadMenu,
-  setShowHypedditDownloadMenu,
   overwriteExistingHypedditDownload,
   setOverwriteExistingHypedditDownload,
+  downloadEmbedCover,
+  downloadRenameWithSoundcloudTitle,
+  onSaveDownloadEmbedCover,
+  onSaveDownloadRenameWithSoundcloudTitle,
   hypedditDownloadPhase,
   availableMoveTargetPlaylists,
   targetPlaylistIdForMove,
@@ -106,6 +112,26 @@ export function TrackPanel({
   formatQuality,
   formatFileSize,
 }: TrackPanelProps) {
+  const [showHypedditDownloadModal, setShowHypedditDownloadModal] = useState(false);
+  const [showMoveTrackModal, setShowMoveTrackModal] = useState(false);
+
+  useEffect(() => {
+    if (availableMoveTargetPlaylists.length === 0) {
+      setShowMoveTrackModal(false);
+    }
+  }, [availableMoveTargetPlaylists.length]);
+
+  function closeMoveTrackModal() {
+    setShowMoveTrackModal(false);
+  }
+
+  function closeHypedditDownloadModal() {
+    setShowHypedditDownloadModal(false);
+    if (!downloadingFromHypeddit) {
+      setOverwriteExistingHypedditDownload(false);
+    }
+  }
+
   return (
     <aside className="track-panel open">
       <div className="track-panel-content">
@@ -142,12 +168,7 @@ export function TrackPanel({
             {canDownloadSelectedTrackFromHypeddit ? (
               <button
                 type="button"
-                onClick={() => {
-                  setShowHypedditDownloadMenu((current) => !current);
-                  if (showHypedditDownloadMenu) {
-                    setOverwriteExistingHypedditDownload(false);
-                  }
-                }}
+                onClick={() => setShowHypedditDownloadModal(true)}
                 disabled={downloadingFromHypeddit}
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
@@ -192,21 +213,38 @@ export function TrackPanel({
                 {dissociatingLocalFile ? t("localDissociateRunning") : t("localDissociateButton")}
               </button>
             ) : null}
+
+            {availableMoveTargetPlaylists.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowMoveTrackModal(true)}
+                disabled={movingTrackBetweenPlaylists || targetPlaylistIdForMove === ""}
+              >
+                {movingTrackBetweenPlaylists ? t("moveTrackRunning") : t("moveTrackOpenModalButton")}
+              </button>
+            ) : null}
           </div>
 
-          {canDownloadSelectedTrackFromHypeddit && showHypedditDownloadMenu ? (
-            <div className="panel-actions hypeddit-download-menu">
-              {selectedTrackInfo.local_file ? (
-                <label className="setting-toggle actions-option">
-                  <input
-                    type="checkbox"
-                    checked={overwriteExistingHypedditDownload}
-                    onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
-                    disabled={downloadingFromHypeddit}
-                  />
-                  <span>{t("hypedditDownloadOverwriteLabel")}</span>
-                </label>
-              ) : null}
+          {availableMoveTargetPlaylists.length === 0 ? (
+            <p className="spectrogram-preview-meta">{t("moveTrackNoCompatibleTarget")}</p>
+          ) : null}
+        </section>
+
+        <CenteredModal
+          open={showHypedditDownloadModal}
+          title={t("hypedditDownloadModalTitle")}
+          closeLabel={t("close")}
+          onClose={closeHypedditDownloadModal}
+          showCloseButton={false}
+          actions={(
+            <>
+              <button
+                type="button"
+                onClick={closeHypedditDownloadModal}
+                disabled={downloadingFromHypeddit}
+              >
+                {t("globalAudioAnalysisCancel")}
+              </button>
               <button
                 type="button"
                 onClick={onDownloadFromHypeddit}
@@ -214,46 +252,97 @@ export function TrackPanel({
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadConfirm")}
               </button>
+            </>
+          )}
+        >
+          <p className="centered-modal-note">{t("hypedditDownloadModalDescription")}</p>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={downloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              disabled={downloadingFromHypeddit}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={downloadEmbedCover}
+              onChange={(event) => onSaveDownloadEmbedCover(event.currentTarget.checked)}
+              disabled={downloadingFromHypeddit}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          {selectedTrackInfo.local_file ? (
+            <>
+              <p className="centered-modal-warning">{t("hypedditDownloadModalExistingFileWarning")}</p>
+              <label className="setting-toggle actions-option">
+                <input
+                  type="checkbox"
+                  checked={overwriteExistingHypedditDownload}
+                  onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
+                  disabled={downloadingFromHypeddit}
+                />
+                <span>{t("hypedditDownloadOverwriteLabel")}</span>
+              </label>
+            </>
+          ) : null}
+
+          {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
+        </CenteredModal>
+
+        <CenteredModal
+          open={showMoveTrackModal}
+          title={t("moveTrackModalTitle")}
+          closeLabel={t("close")}
+          onClose={closeMoveTrackModal}
+          showCloseButton={false}
+          actions={(
+            <>
               <button
                 type="button"
-                onClick={() => {
-                  setShowHypedditDownloadMenu(() => false);
-                  setOverwriteExistingHypedditDownload(false);
-                }}
-                disabled={downloadingFromHypeddit}
+                onClick={closeMoveTrackModal}
+                disabled={movingTrackBetweenPlaylists}
               >
                 {t("globalAudioAnalysisCancel")}
               </button>
-              {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
-            </div>
-          ) : null}
-
-          {availableMoveTargetPlaylists.length > 0 ? (
-            <div className="panel-actions move-track-controls">
-              <select
-                value={targetPlaylistIdForMove}
-                onChange={(event) => setTargetPlaylistIdForMove(Number(event.currentTarget.value))}
-                aria-label={t("moveTrackToPlaylistLabel")}
-                disabled={movingTrackBetweenPlaylists}
-              >
-                {availableMoveTargetPlaylists.map((playlist) => (
-                  <option key={playlist.id} value={playlist.id}>
-                    {playlist.title}
-                  </option>
-                ))}
-              </select>
               <button
                 type="button"
-                onClick={onMoveTrack}
+                onClick={() => {
+                  onMoveTrack();
+                  closeMoveTrackModal();
+                }}
                 disabled={movingTrackBetweenPlaylists || targetPlaylistIdForMove === ""}
               >
-                {movingTrackBetweenPlaylists ? t("moveTrackRunning") : t("moveTrackButton")}
+                {movingTrackBetweenPlaylists ? t("moveTrackRunning") : t("moveTrackModalConfirm")}
               </button>
-            </div>
-          ) : (
-            <p className="spectrogram-preview-meta">{t("moveTrackNoCompatibleTarget")}</p>
+            </>
           )}
-        </section>
+        >
+          <p className="centered-modal-note">{t("moveTrackModalDescription")}</p>
+          <label className="centered-modal-field" htmlFor="move-track-target-playlist">
+            <span>{t("moveTrackToPlaylistLabel")}</span>
+            <select
+              id="move-track-target-playlist"
+              value={targetPlaylistIdForMove}
+              onChange={(event) => setTargetPlaylistIdForMove(Number(event.currentTarget.value))}
+              aria-label={t("moveTrackToPlaylistLabel")}
+              disabled={movingTrackBetweenPlaylists}
+            >
+              {availableMoveTargetPlaylists.map((playlist) => (
+                <option key={playlist.id} value={playlist.id}>
+                  {playlist.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="centered-modal-warning">{t("moveTrackModalWarningLocalAndSc")}</p>
+          <p className="centered-modal-warning">{t("moveTrackModalWarningRekordbox")}</p>
+        </CenteredModal>
 
         {hasAvailableLocalFolder ? (
           <section className="track-panel-actions-card">

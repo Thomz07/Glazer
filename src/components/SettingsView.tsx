@@ -2,6 +2,7 @@ import type { Language, TranslationKey } from "../i18n";
 import type {
   CoverQuality,
   DebugSettings,
+  HypedditConversionFormat,
   PlaylistCoverMode,
   SoundCloudConfigStatus,
   SpectrogramAnalysisScope,
@@ -20,6 +21,7 @@ type SettingsViewProps = {
   analysisAutoApplyFrequencyMax: boolean;
   downloadEmbedCover: boolean;
   downloadRenameWithSoundcloudTitle: boolean;
+  hypedditDownloadConversionFormat: HypedditConversionFormat;
   hypedditDownloadHeadless: boolean;
   hypedditDownloadComment: string;
   setHypedditDownloadComment: (value: string) => void;
@@ -40,6 +42,7 @@ type SettingsViewProps = {
   onSaveAnalysisAutoApplyFrequencyMax: (enabled: boolean) => void;
   onSaveDownloadEmbedCover: (enabled: boolean) => void;
   onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
   onSaveHypedditDownloadHeadless: (enabled: boolean) => void;
   onSaveHypedditDownloadComment: () => void;
   onSaveHypedditDownloadName: () => void;
@@ -61,6 +64,7 @@ export function SettingsView({
   analysisAutoApplyFrequencyMax,
   downloadEmbedCover,
   downloadRenameWithSoundcloudTitle,
+  hypedditDownloadConversionFormat,
   hypedditDownloadHeadless,
   hypedditDownloadComment,
   setHypedditDownloadComment,
@@ -81,6 +85,7 @@ export function SettingsView({
   onSaveAnalysisAutoApplyFrequencyMax,
   onSaveDownloadEmbedCover,
   onSaveDownloadRenameWithSoundcloudTitle,
+  onSaveHypedditDownloadConversionFormat,
   onSaveHypedditDownloadHeadless,
   onSaveHypedditDownloadComment,
   onSaveHypedditDownloadName,
@@ -190,6 +195,19 @@ export function SettingsView({
               onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
             />
             <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadConversionFormatLabel")}</span>
+            <select
+              value={hypedditDownloadConversionFormat}
+              onChange={(event) => onSaveHypedditDownloadConversionFormat(event.currentTarget.value as HypedditConversionFormat)}
+            >
+              <option value="original">{t("downloadConversionFormatOriginal")}</option>
+              <option value="mp3">MP3</option>
+              <option value="wav">WAV</option>
+              <option value="flac">FLAC</option>
+            </select>
           </label>
 
           <label className="setting-toggle auth-actions">
