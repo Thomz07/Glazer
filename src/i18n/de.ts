@@ -224,6 +224,8 @@ export const de = {
   connectedAs: "Verbunden als",
   connected: "Verbunden",
   debugTitle: "Debug",
+  debugHypedditPreloadAppSessions: "SoundCloud- und Spotify-Sessions vor dem Hypeddit-Gate vorladen",
+  debugHypedditClickDelayMs: "Verzogerung zwischen Hypeddit-Klicks (ms)",
   playlistCoverModeLabel: "Quelle fur Playlist-Cover",
   playlistCoverModeFirst: "Erster Track",
   playlistCoverModeRandom: "Zufallig",

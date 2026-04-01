@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 
 const hypedditUrl = process.argv[2];
@@ -15,6 +14,7 @@ const useAppSoundCloudArg = process.argv[10] ?? "false";
 const useAppSpotifyArg = process.argv[11] ?? "false";
 const profileDirArg = process.argv[12] ?? "";
 const downloadStartTimeoutSecondsArg = process.argv[13] ?? "30";
+const clickDelayMsArg = process.argv[14] ?? "0";
 
 if (!hypedditUrl) {
   console.error("Missing Hypeddit URL");
@@ -40,29 +40,14 @@ const downloadStartTimeoutSeconds = Number.isFinite(parsedDownloadStartTimeoutSe
   ? Math.min(300, Math.max(5, parsedDownloadStartTimeoutSeconds))
   : 30;
 const downloadStartTimeoutMs = downloadStartTimeoutSeconds * 1000;
+const parsedClickDelayMs = Number.parseInt(clickDelayMsArg, 10);
+const clickDelayMs = Number.isFinite(parsedClickDelayMs)
+  ? Math.min(5000, Math.max(0, parsedClickDelayMs))
+  : 0;
 
 process.stdout.write(
-  `__LOG__:app_connections soundcloud=${useAppSoundCloudConnection} spotify=${useAppSpotifyConnection} headless=${headless} download_start_timeout_seconds=${downloadStartTimeoutSeconds}\n`,
+  `__LOG__:app_connections soundcloud=${useAppSoundCloudConnection} spotify=${useAppSpotifyConnection} headless=${headless} download_start_timeout_seconds=${downloadStartTimeoutSeconds} click_delay_ms=${clickDelayMs}\n`,
 );
-
-function purgeRestoredTabsState(profileDirectory) {
-  const targets = [
-    path.join(profileDirectory, "Default", "Sessions"),
-    path.join(profileDirectory, "Default", "Session Storage"),
-    path.join(profileDirectory, "Default", "Last Session"),
-    path.join(profileDirectory, "Default", "Last Tabs"),
-    path.join(profileDirectory, "Default", "Current Session"),
-    path.join(profileDirectory, "Default", "Current Tabs"),
-  ];
-
-  for (const target of targets) {
-    try {
-      fs.rmSync(target, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors to keep download flow resilient.
-    }
-  }
-}
 
 function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -72,9 +57,16 @@ async function humanPause(page, min = 120, max = 380) {
   await page.waitForTimeout(randomBetween(min, max));
 }
 
+async function debugClickPause(page) {
+  if (clickDelayMs > 0) {
+    await page.waitForTimeout(clickDelayMs);
+  }
+}
+
 async function humanClick(locator, page) {
   await locator.scrollIntoViewIfNeeded();
   await humanPause(page, 90, 220);
+  await debugClickPause(page);
   try {
     await locator.hover({ timeout: 2000 });
   } catch {
@@ -82,6 +74,7 @@ async function humanClick(locator, page) {
   }
   await humanPause(page, 60, 180);
   await locator.click({ timeout: 3000 });
+  await debugClickPause(page);
 }
 
 function buildCommonLaunchOptions(isHeadless) {
@@ -99,7 +92,7 @@ function buildCommonLaunchOptions(isHeadless) {
   };
 }
 
-async function launchContextWithBrowserFallback(profileDirectory, isHeadless, defaultHint = "") {
+async function launchContextWithBrowserFallback(profileDirectory, isHeadless) {
   const base = buildCommonLaunchOptions(isHeadless);
 
   const candidates = [
@@ -125,14 +118,8 @@ async function launchContextWithBrowserFallback(profileDirectory, isHeadless, de
     },
   ];
 
-  if (defaultHint) {
-    process.stdout.write(`__LOG__:Default browser hint detected: ${defaultHint}\n`);
-  }
-
-  const preferredOrder = rankCandidatesByDefaultBrowser(candidates, defaultHint);
-
   const errors = [];
-  for (const candidate of preferredOrder) {
+  for (const candidate of candidates) {
     try {
       const context = await chromium.launchPersistentContext(profileDirectory, {
         ...base,
@@ -146,210 +133,6 @@ async function launchContextWithBrowserFallback(profileDirectory, isHeadless, de
   }
 
   throw new Error(`Aucun navigateur compatible trouvé. Détails: ${errors.join(" | ")}`);
-}
-
-function detectDefaultBrowserHint() {
-  const fromEnv = (process.env.BROWSER || "").toLowerCase().trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
-
-  if (process.platform === "darwin") {
-    try {
-      const bundleId = execFileSync(
-        "osascript",
-        ["-e", 'id of application (path to default application for URL "https://hypeddit.com")'],
-        { encoding: "utf8" },
-      )
-        .trim()
-        .toLowerCase();
-      return bundleId;
-    } catch {
-      return "";
-    }
-  }
-
-  return "";
-}
-
-function rankCandidatesByDefaultBrowser(candidates, defaultHint) {
-  if (!defaultHint) {
-    return candidates;
-  }
-
-  const scoreFor = (label) => {
-    const l = label.toLowerCase();
-    if ((defaultHint.includes("brave") || defaultHint.includes("com.brave.browser")) && l.includes("brave")) {
-      return 100;
-    }
-    if ((defaultHint.includes("chrome") || defaultHint.includes("com.google.chrome")) && l.includes("chrome")) {
-      return 100;
-    }
-    if ((defaultHint.includes("edge") || defaultHint.includes("com.microsoft.edgemac")) && l.includes("edge")) {
-      return 100;
-    }
-    if ((defaultHint.includes("chromium") || defaultHint.includes("com.chromium")) && l.includes("chromium")) {
-      return 100;
-    }
-    return 0;
-  };
-
-  return [...candidates].sort((a, b) => scoreFor(b.label) - scoreFor(a.label));
-}
-
-function scoreBrowserAgainstHint(browserName, defaultHint) {
-  if (!defaultHint) {
-    return 0;
-  }
-
-  const normalized = browserName.toLowerCase();
-  if ((defaultHint.includes("brave") || defaultHint.includes("com.brave.browser")) && normalized.includes("brave")) {
-    return 100;
-  }
-  if ((defaultHint.includes("chrome") || defaultHint.includes("com.google.chrome")) && normalized.includes("chrome")) {
-    return 100;
-  }
-  if ((defaultHint.includes("edge") || defaultHint.includes("com.microsoft.edgemac")) && normalized.includes("edge")) {
-    return 100;
-  }
-  if ((defaultHint.includes("chromium") || defaultHint.includes("com.chromium")) && normalized.includes("chromium")) {
-    return 100;
-  }
-
-  return 0;
-}
-
-function getSystemChromiumUserDataCandidates(defaultHint) {
-  const candidates = [];
-
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? "";
-    if (localAppData) {
-      candidates.push(
-        { browser: "chrome", userDataDir: path.join(localAppData, "Google", "Chrome", "User Data") },
-        { browser: "edge", userDataDir: path.join(localAppData, "Microsoft", "Edge", "User Data") },
-        { browser: "brave", userDataDir: path.join(localAppData, "BraveSoftware", "Brave-Browser", "User Data") },
-      );
-    }
-  } else if (process.platform === "darwin") {
-    const home = process.env.HOME ?? "";
-    if (home) {
-      candidates.push(
-        { browser: "chrome", userDataDir: path.join(home, "Library", "Application Support", "Google", "Chrome") },
-        { browser: "edge", userDataDir: path.join(home, "Library", "Application Support", "Microsoft Edge") },
-        { browser: "brave", userDataDir: path.join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser") },
-      );
-    }
-  } else {
-    const home = process.env.HOME ?? "";
-    if (home) {
-      candidates.push(
-        { browser: "chrome", userDataDir: path.join(home, ".config", "google-chrome") },
-        { browser: "edge", userDataDir: path.join(home, ".config", "microsoft-edge") },
-        { browser: "brave", userDataDir: path.join(home, ".config", "BraveSoftware", "Brave-Browser") },
-        { browser: "chromium", userDataDir: path.join(home, ".config", "chromium") },
-      );
-    }
-  }
-
-  return candidates
-    .filter((candidate) => fs.existsSync(candidate.userDataDir))
-    .sort((left, right) => scoreBrowserAgainstHint(right.browser, defaultHint) - scoreBrowserAgainstHint(left.browser, defaultHint));
-}
-
-function readLastUsedProfileName(userDataDir) {
-  const localStatePath = path.join(userDataDir, "Local State");
-  try {
-    const raw = fs.readFileSync(localStatePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const lastUsed = parsed?.profile?.last_used;
-    if (typeof lastUsed === "string" && lastUsed.trim()) {
-      return lastUsed.trim();
-    }
-  } catch {
-    // Ignore parsing errors and fallback to Default.
-  }
-
-  return "Default";
-}
-
-function listCandidateProfileNames(userDataDir) {
-  const names = new Set();
-  names.add(readLastUsedProfileName(userDataDir));
-  names.add("Default");
-
-  const localStatePath = path.join(userDataDir, "Local State");
-  try {
-    const raw = fs.readFileSync(localStatePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const infoCache = parsed?.profile?.info_cache;
-    if (infoCache && typeof infoCache === "object") {
-      for (const key of Object.keys(infoCache)) {
-        names.add(key);
-      }
-    }
-  } catch {
-    // Ignore parsing errors and keep filesystem fallback.
-  }
-
-  try {
-    const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (entry.name === "Default" || /^Profile\s+\d+$/i.test(entry.name)) {
-        names.add(entry.name);
-      }
-    }
-  } catch {
-    // Ignore filesystem listing errors.
-  }
-
-  return [...names].filter((name) => fs.existsSync(path.join(userDataDir, name)));
-}
-
-function getSystemBrowserLaunchCandidates(browserName) {
-  if (browserName === "chrome") {
-    return [{ label: "chrome-channel", options: { channel: "chrome" } }];
-  }
-
-  if (browserName === "edge") {
-    return [{ label: "msedge-channel", options: { channel: "msedge" } }];
-  }
-
-  if (browserName === "brave") {
-    if (process.platform === "win32") {
-      return [{
-        label: "brave-executable",
-        options: {
-          executablePath: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-        },
-      }];
-    }
-
-    if (process.platform === "darwin") {
-      return [{
-        label: "brave-executable",
-        options: {
-          executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        },
-      }];
-    }
-
-    return [{
-      label: "brave-executable",
-      options: {
-        executablePath: "/usr/bin/brave-browser",
-      },
-    }];
-  }
-
-  if (browserName === "chromium") {
-    return [{ label: "playwright-chromium", options: {} }];
-  }
-
-  return [];
 }
 
 async function hasAuthenticatedSoundCloudSession(context) {
@@ -432,108 +215,6 @@ async function hasAuthenticatedSpotifySession(context) {
   }
 }
 
-async function tryLaunchWithSystemProfileSession(defaultHint, isHeadless, needSoundCloudSession) {
-  const browserCandidates = getSystemChromiumUserDataCandidates(defaultHint);
-  for (const browserCandidate of browserCandidates) {
-    const profileNames = listCandidateProfileNames(browserCandidate.userDataDir);
-    const launchCandidates = getSystemBrowserLaunchCandidates(browserCandidate.browser);
-
-    for (const profileName of profileNames) {
-      for (const launchCandidate of launchCandidates) {
-        const options = {
-          ...buildCommonLaunchOptions(isHeadless),
-          ...launchCandidate.options,
-          args: [
-            ...buildCommonLaunchOptions(isHeadless).args,
-            `--profile-directory=${profileName}`,
-          ],
-        };
-
-        try {
-          const context = await chromium.launchPersistentContext(browserCandidate.userDataDir, options);
-          const soundCloudReady = needSoundCloudSession
-            ? await hasAuthenticatedSoundCloudSession(context)
-            : true;
-
-          if (soundCloudReady) {
-            process.stdout.write(
-              `__LOG__:Using system browser profile ${browserCandidate.browser}/${profileName} via ${launchCandidate.label}\n`,
-            );
-            return context;
-          }
-
-          await context.close();
-        } catch (error) {
-          process.stdout.write(
-            `__LOG__:System profile launch failed ${browserCandidate.browser}/${profileName}/${launchCandidate.label}: ${error?.message ?? String(error)}\n`,
-          );
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function copyPathIfAvailable(sourcePath, destinationPath) {
-  if (!fs.existsSync(sourcePath)) {
-    return false;
-  }
-
-  try {
-    const stats = fs.statSync(sourcePath);
-    if (stats.isDirectory()) {
-      fs.mkdirSync(destinationPath, { recursive: true });
-      fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true });
-      return true;
-    }
-
-    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-    fs.copyFileSync(sourcePath, destinationPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function seedPlaywrightProfileFromSystemSession(targetProfileDir, defaultHint) {
-  const candidates = getSystemChromiumUserDataCandidates(defaultHint);
-  for (const candidate of candidates) {
-    const profileName = readLastUsedProfileName(candidate.userDataDir);
-    const sourceProfileDir = path.join(candidate.userDataDir, profileName);
-    if (!fs.existsSync(sourceProfileDir)) {
-      continue;
-    }
-
-    let copied = false;
-    copied = copyPathIfAvailable(
-      path.join(candidate.userDataDir, "Local State"),
-      path.join(targetProfileDir, "Local State"),
-    ) || copied;
-
-    const copyPlan = [
-      [path.join(sourceProfileDir, "Network", "Cookies"), path.join(targetProfileDir, "Default", "Network", "Cookies")],
-      [path.join(sourceProfileDir, "Cookies"), path.join(targetProfileDir, "Default", "Cookies")],
-      [path.join(sourceProfileDir, "Preferences"), path.join(targetProfileDir, "Default", "Preferences")],
-      [path.join(sourceProfileDir, "Local Storage", "leveldb"), path.join(targetProfileDir, "Default", "Local Storage", "leveldb")],
-      [path.join(sourceProfileDir, "Session Storage"), path.join(targetProfileDir, "Default", "Session Storage")],
-    ];
-
-    for (const [sourcePath, destinationPath] of copyPlan) {
-      copied = copyPathIfAvailable(sourcePath, destinationPath) || copied;
-    }
-
-    if (copied) {
-      process.stdout.write(
-        `__LOG__:Seeded Playwright profile from ${candidate.browser} profile=${profileName}\n`,
-      );
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function sanitizeFileName(name) {
   return name
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
@@ -552,37 +233,6 @@ async function autoSubmitSoundCloud(page) {
   }
 }
 
-async function hasSoundCloudSession(context) {
-  try {
-    const cookies = await context.cookies("https://soundcloud.com", "https://secure.soundcloud.com");
-    return cookies.some((cookie) => /oauth|auth|session|sid|sc_[a-z_]*session/i.test(cookie.name));
-  } catch {
-    return false;
-  }
-}
-
-async function ensureSoundCloudSession(context, page, isHeadless) {
-  if (await hasSoundCloudSession(context)) {
-    return true;
-  }
-
-  if (isHeadless) {
-    return false;
-  }
-
-  await page.goto("https://soundcloud.com/signin", { waitUntil: "domcontentloaded", timeout: 60000 });
-
-  const timeoutAt = Date.now() + 180000;
-  while (Date.now() < timeoutAt) {
-    if (await hasSoundCloudSession(context)) {
-      return true;
-    }
-    await page.waitForTimeout(1000);
-  }
-
-  return false;
-}
-
 async function injectBypassScript(
   page,
   injectedComment,
@@ -590,16 +240,221 @@ async function injectBypassScript(
   injectedEmail,
   injectedUseAppSoundCloudConnection,
   injectedUseAppSpotifyConnection,
+  injectedClickDelayMs,
 ) {
-  await page.evaluate(({ commentText, nameText, emailText, useAppSoundCloud, useAppSpotify }) => {
+  await page.evaluate(({ commentText, nameText, emailText, useAppSoundCloud, useAppSpotify, clickDelayInMs }) => {
+    const readHiddenValue = (id) => {
+      const node = document.getElementById(id);
+      if (!node) {
+        return "";
+      }
+      const value = node.value;
+      return typeof value === "string" ? value.trim() : "";
+    };
+
+    const configuredSteps = readHiddenValue("nwSteps")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+
     window.hypedditSettings = {
       email: emailText,
       name: nameText,
       comment: commentText,
       use_app_soundcloud_connection: useAppSoundCloud,
       use_app_spotify_connection: useAppSpotify,
+      click_delay_in_ms: Number.isFinite(Number(clickDelayInMs))
+        ? Math.max(0, Number(clickDelayInMs))
+        : 0,
+      input_to_click_gap_ms: Number.isFinite(Number(clickDelayInMs))
+        ? Math.max(260, Number(clickDelayInMs))
+        : 260,
       auto_close: true,
       auto_close_timeout_in_ms: 5000,
+    };
+
+    window.hypedditGateConfig = {
+      is_skippable: readHiddenValue("is_skippable") === "1",
+      is_unlimited: readHiddenValue("is_unlimited") === "1",
+      gate_type: readHiddenValue("gate_type"),
+      nw_steps: configuredSteps,
+    };
+
+    window.__glazerQueuedClick = Promise.resolve();
+    window.__glazerEmailActionLockUntil = 0;
+    window.__glazerEmailNeedsPlaywrightTyping = false;
+    window.__glazerEmailAttemptedInCurrentStep = false;
+    window.__glazerEmailState = "idle";
+    window.__glazerLastInputAt = 0;
+    window.__glazerCurrentStepSignature = "";
+    window.__glazerCurrentStepTokens = [];
+    window.__glazerStepTokenRunAt = Object.create(null);
+    window.__glazerStepActionLog = [];
+    window.__glazerMaxStepActionLog = 80;
+    window.__glazerRepoDone = Object.create(null);
+    window.__glazerRepoCycleRunning = false;
+    window.__glazerNextClicks = Object.create(null);
+    window.__glazerLastDetectedChallengeType = "";
+    window.__glazerFinalDownloadLockUntil = 0;
+    window.__glazerRepoLoopTimer = null;
+
+    window.recordStepAction = function (action, details) {
+      const entry = {
+        at: Date.now(),
+        action: String(action || "unknown"),
+        details: details && typeof details === "object" ? details : {},
+      };
+
+      if (!Array.isArray(window.__glazerStepActionLog)) {
+        window.__glazerStepActionLog = [];
+      }
+
+      window.__glazerStepActionLog.push(entry);
+      const maxEntries = Number.isFinite(Number(window.__glazerMaxStepActionLog))
+        ? Math.max(10, Number(window.__glazerMaxStepActionLog))
+        : 80;
+      if (window.__glazerStepActionLog.length > maxEntries) {
+        window.__glazerStepActionLog.splice(0, window.__glazerStepActionLog.length - maxEntries);
+      }
+    };
+
+    window.buildStepSignature = function (stepElement, tokens) {
+      if (!stepElement) {
+        return "";
+      }
+
+      const classPart = Array.from(stepElement.classList || [])
+        .map((item) => String(item).toLowerCase())
+        .sort()
+        .join(".");
+      const tokenPart = Array.from(new Set((Array.isArray(tokens) ? tokens : [])
+        .map((item) => String(item).toLowerCase())
+        .filter(Boolean)))
+        .sort()
+        .join("|");
+      const markerPart = [
+        stepElement.getAttribute("id") || "",
+        stepElement.getAttribute("data-step") || "",
+      ]
+        .filter(Boolean)
+        .join("|");
+
+      return `${tokenPart}::${classPart}::${markerPart}`;
+    };
+
+    window.canRunTokenInCurrentStep = function (token) {
+      const normalizedToken = String(token || "").toLowerCase();
+      if (!normalizedToken) {
+        return false;
+      }
+
+      const stepSignature = window.__glazerCurrentStepSignature || "__unknown_step__";
+      if (!window.__glazerStepTokenRunAt[stepSignature]) {
+        window.__glazerStepTokenRunAt[stepSignature] = Object.create(null);
+      }
+
+      const tokenRuns = window.__glazerStepTokenRunAt[stepSignature];
+      const now = Date.now();
+      const lastRunAt = Number(tokenRuns[normalizedToken] || 0);
+      const minGapMs = normalizedToken === "email"
+        ? Math.max(1600, Number(window.hypedditSettings.click_delay_in_ms || 0) + 950)
+        : 1200;
+
+      if (now - lastRunAt < minGapMs) {
+        return false;
+      }
+
+      tokenRuns[normalizedToken] = now;
+      return true;
+    };
+
+    window.queueClick = function (targetElement, explicitDelayInMs) {
+      if (targetElement === null || targetElement === undefined) {
+        return;
+      }
+
+      const parsedExplicitDelay = Number(explicitDelayInMs);
+      const delay = Number.isFinite(parsedExplicitDelay)
+        ? Math.max(0, parsedExplicitDelay)
+        : window.hypedditSettings.click_delay_in_ms;
+      window.__glazerQueuedClick = window.__glazerQueuedClick.then(
+        () => new Promise((resolve) => {
+          const now = Date.now();
+          const lastInputAt = Number(window.__glazerLastInputAt || 0);
+          const elapsedSinceInput = Math.max(0, now - lastInputAt);
+          const minInputGap = Number.isFinite(Number(window.hypedditSettings.input_to_click_gap_ms))
+            ? Math.max(0, Number(window.hypedditSettings.input_to_click_gap_ms))
+            : 0;
+          const waitForInputGap = Math.max(0, minInputGap - elapsedSinceInput);
+          const finalDelay = Math.max(delay, waitForInputGap);
+
+          window.setTimeout(() => {
+            try {
+              targetElement.click();
+            } catch {
+              // Ignore click errors in queued mode.
+            }
+            resolve();
+          }, finalDelay);
+        }),
+      );
+    };
+
+    window.isElementVisible = function (element) {
+      if (!element) {
+        return false;
+      }
+
+      const style = window.getComputedStyle(element);
+      if (!style || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    window.findVisibleElementBySelector = function (selector) {
+      if (!selector) {
+        return null;
+      }
+
+      const candidates = Array.from(document.querySelectorAll(selector));
+      for (const candidate of candidates) {
+        if (window.isElementVisible(candidate)) {
+          return candidate;
+        }
+      }
+
+      return null;
+    };
+
+    window.setInputValue = function (inputElement, nextValue) {
+      if (inputElement === null || inputElement === undefined) {
+        return;
+      }
+
+      const inputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      const textareaValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+
+      if (inputElement instanceof window.HTMLTextAreaElement && textareaValueSetter) {
+        textareaValueSetter.call(inputElement, nextValue);
+      } else if (inputValueSetter) {
+        inputValueSetter.call(inputElement, nextValue);
+      } else {
+        inputElement.value = nextValue;
+      }
+
+      inputElement.dispatchEvent(new Event("input", { bubbles: true }));
+      inputElement.dispatchEvent(new Event("change", { bubbles: true }));
+      inputElement.dispatchEvent(new Event("blur", { bubbles: true }));
+      window.__glazerLastInputAt = Date.now();
     };
 
     window.handleFollowOptions = function (containerElementId, skipperId) {
@@ -612,7 +467,7 @@ async function injectBypassScript(
             accountItem.classList.add("done");
           });
 
-        document.getElementById(skipperId).click();
+        window.queueClick(document.getElementById(skipperId));
       }
     };
 
@@ -665,13 +520,13 @@ async function injectBypassScript(
           "#myCarousel .right.carousel-control, #myCarousel .carousel-control-next, #myCarousel [data-slide='next']",
         );
         if (carouselNext !== null) {
-          carouselNext.click();
+          window.queueClick(carouselNext);
           return true;
         }
         return false;
       }
 
-      skipper.click();
+      window.queueClick(skipper);
       return true;
     };
 
@@ -680,13 +535,7 @@ async function injectBypassScript(
       const useAppSoundCloud = window.hypedditSettings.use_app_soundcloud_connection;
 
       if (document.getElementById("sc_comment_text") !== null) {
-        document
-          .getElementById("sc_comment_text")
-          .setAttribute("value", comment);
-      }
-
-      if (document.getElementById("sc_comment_text") !== null) {
-        document.getElementById("sc_comment_text").value = comment;
+        window.setInputValue(document.getElementById("sc_comment_text"), comment);
       }
 
       if (document.getElementById("step_sc") !== null) {
@@ -697,7 +546,7 @@ async function injectBypassScript(
 
         const soundCloudLink = soundCloudStep.querySelector("a");
         if (soundCloudLink !== null) {
-          soundCloudLink.click();
+          window.queueClick(soundCloudLink);
           return;
         }
 
@@ -726,7 +575,7 @@ async function injectBypassScript(
       if (spotifyStep !== null) {
         const spotifyLink = spotifyStep.querySelector("a");
         if (spotifyLink !== null) {
-          spotifyLink.click();
+          window.queueClick(spotifyLink);
           return;
         }
       }
@@ -738,7 +587,7 @@ async function injectBypassScript(
     };
 
     window.handleDownload = function () {
-      document.getElementById("gateDownloadButton").click();
+      window.queueClick(document.getElementById("gateDownloadButton"));
 
       if (window.hypedditSettings.auto_close) {
         const timeout = window.hypedditSettings.auto_close_timeout_in_ms;
@@ -750,21 +599,44 @@ async function injectBypassScript(
     };
 
     window.handleEmail = function () {
-      const email = window.hypedditSettings.email;
-      const name = window.hypedditSettings.name;
-
-      if (document.getElementById("email_name") !== null) {
-        document.getElementById("email_name").setAttribute("value", name);
+      if (window.__glazerEmailState === "awaiting_playwright" || window.__glazerEmailState === "submitted") {
+        return;
       }
 
-      if (document.getElementById("email_address") !== null) {
-        document
-          .getElementById("email_address")
-          .setAttribute("value", email);
-        document.getElementById("email_address").value = email;
+      const now = Date.now();
+      if (now < window.__glazerEmailActionLockUntil) {
+        return;
+      }
+      if (window.__glazerEmailAttemptedInCurrentStep) {
+        return;
+      }
+      window.__glazerEmailActionLockUntil =
+        now + Math.max(1500, (window.hypedditSettings.click_delay_in_ms || 0) + 900);
+
+      const emailSubmitButton =
+        document.getElementById("email_to_downloads_next") ||
+        document.querySelector(
+          '#step_email button[type="submit"], #step_email input[type="submit"], #step_email .btn-primary, #step_email [id*="next"]',
+        );
+
+      const nameInput = document.getElementById("email_name");
+      const emailInput = document.getElementById("email_address");
+      if (nameInput !== null && window.hypedditSettings.name) {
+        window.setInputValue(nameInput, window.hypedditSettings.name);
+      }
+      if (emailInput !== null && window.hypedditSettings.email) {
+        window.setInputValue(emailInput, window.hypedditSettings.email);
       }
 
-      document.getElementById("email_to_downloads_next").click();
+      if (emailSubmitButton !== null) {
+        window.__glazerEmailNeedsPlaywrightTyping = true;
+        window.__glazerEmailAttemptedInCurrentStep = true;
+        window.__glazerEmailState = "awaiting_playwright";
+        window.recordStepAction("email_ready", { has_submit_button: true });
+      } else {
+        const skipped = window.trySkipStep("email");
+        window.recordStepAction("email_submit_missing", { skipped });
+      }
     };
 
     window.handleTikTok = function () {
@@ -772,35 +644,327 @@ async function injectBypassScript(
     };
 
     window.handleFacebook = function () {
-      document.getElementById("fbCarouselSocialSection").click();
+      window.queueClick(document.getElementById("fbCarouselSocialSection"));
     };
 
     window.handleMultiPortal = function () {
-      document.getElementById("step_email").previousElementSibling.click();
       window.handleEmail();
     };
 
     window.handleEmailSoundCloud = function () {
-      document.getElementById("step_email").previousElementSibling.click();
       window.handleEmail();
     };
 
     window.handleSoundCloudYoutube = function () {
-      document.getElementById("step_yt").previousElementSibling.click();
+      window.queueClick(document.getElementById("step_yt")?.previousElementSibling);
       window.handleYoutube();
     };
 
     window.handleDonate = function () {
-      document.getElementById("step_dn").previousElementSibling.click();
-      document.getElementById("donation_next").click();
+      window.queueClick(document.getElementById("step_dn")?.previousElementSibling);
+      window.queueClick(document.getElementById("donation_next"));
     };
 
     window.handleMixcloud = function () {
-      document.getElementById("skipper_mc").click();
+      window.queueClick(document.getElementById("skipper_mc"));
     };
 
     window.handleBandCamp = function () {
-      document.getElementById("skipper_bc").click();
+      window.queueClick(document.getElementById("skipper_bc"));
+    };
+
+    window.resolveActiveStepTokens = function (stepElement) {
+      if (!stepElement) {
+        return [];
+      }
+
+      const classes = Array.from(stepElement.classList || []).map((item) => String(item).toLowerCase());
+      const tokens = new Set();
+
+      const configured = Array.isArray(window.hypedditGateConfig?.nw_steps)
+        ? window.hypedditGateConfig.nw_steps
+        : [];
+      for (const stepCode of configured) {
+        if (classes.includes(stepCode)) {
+          tokens.add(stepCode);
+        }
+
+        const configuredStepElement = document.getElementById(`step_${stepCode}`);
+        if (configuredStepElement && stepElement.contains(configuredStepElement)) {
+          tokens.add(stepCode);
+        }
+      }
+
+      for (const className of classes) {
+        if (className.includes("|")) {
+          className
+            .split("|")
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .forEach((item) => tokens.add(item));
+        }
+      }
+
+      if (tokens.size === 0) {
+        if (stepElement.querySelector("#step_email")) {
+          tokens.add("email");
+        }
+        if (stepElement.querySelector("#step_sc")) {
+          tokens.add("sc");
+        }
+        if (stepElement.querySelector("#gateDownloadButton")) {
+          tokens.add("dw");
+        }
+      }
+
+      return Array.from(tokens);
+    };
+
+    window.runStepToken = function (token) {
+      const normalizedToken = String(token || "").toLowerCase();
+      if (!normalizedToken) {
+        return;
+      }
+
+      if (!window.canRunTokenInCurrentStep(normalizedToken)) {
+        return;
+      }
+
+      switch (normalizedToken) {
+        case "email":
+          window.handleEmail();
+          break;
+        case "sc":
+          window.handleSoundCloud();
+          break;
+        case "ig":
+          window.handleInstagram();
+          break;
+        case "yt":
+          window.handleYoutube();
+          break;
+        case "sp":
+          window.handleSpotify();
+          break;
+        case "tk":
+          window.handleTikTok();
+          break;
+        case "fb":
+          window.handleFacebook();
+          break;
+        case "mc":
+          window.handleMixcloud();
+          break;
+        case "bc":
+          window.handleBandCamp();
+          break;
+        case "dn":
+          window.handleDonate();
+          break;
+        case "dw":
+          window.handleDownload();
+          break;
+        default:
+          break;
+      }
+
+      window.recordStepAction("token_run", {
+        token: normalizedToken,
+        step_signature: window.__glazerCurrentStepSignature,
+      });
+    };
+
+    window.detectVisibleChallenge = function () {
+      const done = window.__glazerRepoDone || {};
+      const challenges = [
+        { type: "initial_download", id: "downloadProcess" },
+        { type: "sc_comment", id: "sc_comment_text" },
+        { type: "sc_connect", selector: "#login_to_sc, #step_sc a[href], #step_sc a" },
+        { type: "ig_follow", selector: ".button-instagram-1.undone, #instagram_status a.undone" },
+        { type: "tk_follow", selector: ".button-tiktok-1.undone, #tiktok_status a.undone" },
+        { type: "fb_like", selector: ".button-facebook.undone, #fbCarouselSocialSection" },
+        { type: "tw_follow", selector: ".button-twitter.undone" },
+        { type: "yt_subscribe", selector: ".button-youtube.undone, #youtube_status a.undone" },
+        { type: "sp_follow", selector: ".button-spotify.undone, #login_to_sp, #step_sp a[href], #step_sp a" },
+        {
+          type: "next_button",
+          selector: "button.button-next:not(.hide), #myCarousel .right.carousel-control, #myCarousel .carousel-control-next, #myCarousel [data-slide='next']",
+        },
+        { type: "email_input", id: "email_address" },
+        { type: "final_download", id: "gateDownloadButton" },
+      ];
+
+      const shouldSkip = (type) => {
+        if (type === "initial_download" && done.initial_download) {
+          return true;
+        }
+        if (type === "sc_comment" && (done.sc_comment || done.sc)) {
+          return true;
+        }
+        if (type === "sc_connect" && done.sc) {
+          return true;
+        }
+        if (type === "ig_follow" && done.ig) {
+          return true;
+        }
+        if (type === "tk_follow" && done.tk) {
+          return true;
+        }
+        if (type === "fb_like" && done.fb) {
+          return true;
+        }
+        if (type === "tw_follow" && done.tw) {
+          return true;
+        }
+        if (type === "yt_subscribe" && done.yt) {
+          return true;
+        }
+        if (type === "sp_follow" && done.sp) {
+          return true;
+        }
+        if (type === "email_input" && (done.email || window.__glazerEmailState === "submitted")) {
+          return true;
+        }
+
+        return false;
+      };
+
+      for (const challenge of challenges) {
+        if (shouldSkip(challenge.type)) {
+          continue;
+        }
+
+        const element = challenge.id
+          ? document.getElementById(challenge.id)
+          : window.findVisibleElementBySelector(challenge.selector);
+        if (!element || !window.isElementVisible(element)) {
+          continue;
+        }
+
+        return { type: challenge.type, element };
+      }
+
+      return null;
+    };
+
+    window.handleDetectedChallenge = function (challengeType, element) {
+      const done = window.__glazerRepoDone || {};
+
+      switch (challengeType) {
+        case "initial_download":
+          if (element) {
+            window.queueClick(element);
+            done.initial_download = true;
+            return true;
+          }
+          return false;
+
+        case "sc_comment":
+          if (element) {
+            window.setInputValue(element, window.hypedditSettings.comment);
+            done.sc_comment = true;
+            return true;
+          }
+          return false;
+
+        case "sc_connect": {
+          if (window.hypedditSettings.use_app_soundcloud_connection && window.trySkipStep("sc")) {
+            done.sc = true;
+            return true;
+          }
+
+          const clickable = element || window.findVisibleElementBySelector("#login_to_sc, #step_sc a[href], #step_sc a");
+          if (clickable) {
+            window.queueClick(clickable);
+            done.sc = true;
+            return true;
+          }
+
+          if (window.trySkipStep("sc")) {
+            done.sc = true;
+            return true;
+          }
+
+          return false;
+        }
+
+        case "ig_follow":
+          window.handleInstagram();
+          done.ig = true;
+          return true;
+
+        case "tk_follow":
+          window.handleTikTok();
+          done.tk = true;
+          return true;
+
+        case "fb_like":
+          window.handleFacebook();
+          done.fb = true;
+          return true;
+
+        case "tw_follow":
+          if (element) {
+            window.queueClick(element);
+          }
+          window.trySkipStep("tw");
+          done.tw = true;
+          return true;
+
+        case "yt_subscribe":
+          window.handleYoutube();
+          done.yt = true;
+          return true;
+
+        case "sp_follow":
+          window.handleSpotify();
+          done.sp = true;
+          return true;
+
+        case "next_button": {
+          if (!element) {
+            return false;
+          }
+
+          const rawKey =
+            element.getAttribute("id") ||
+            element.getAttribute("data-step") ||
+            (element.textContent || "").trim() ||
+            element.className ||
+            "next";
+          const nextKey = String(rawKey).slice(0, 180);
+          if (window.__glazerNextClicks[nextKey]) {
+            return true;
+          }
+
+          window.__glazerNextClicks[nextKey] = Date.now();
+          window.queueClick(element);
+          return true;
+        }
+
+        case "email_input":
+          if (window.__glazerEmailState === "submitted") {
+            done.email = true;
+            return true;
+          }
+          window.handleEmail();
+          return true;
+
+        case "final_download": {
+          const now = Date.now();
+          if (now < window.__glazerFinalDownloadLockUntil) {
+            return false;
+          }
+
+          window.__glazerFinalDownloadLockUntil =
+            now + Math.max(3800, Number(window.hypedditSettings.click_delay_in_ms || 0) + 2500);
+          window.handleDownload();
+          return true;
+        }
+
+        default:
+          return false;
+      }
     };
 
     const targetNode = document.getElementById("myCarousel");
@@ -810,93 +974,96 @@ async function injectBypassScript(
 
     const config = { attributes: true, childList: true, subtree: true };
 
-    let prevStepContent = null;
-    const callback = (mutationList) => {
-      for (const mutation of mutationList) {
-        if (mutation.type === "attributes") {
-          const stepContent = document.querySelector(
-            ".fangate-slider-content:not(.move-left)"
-          );
+    const processCurrentStep = () => {
+      const stepContent = document.querySelector(".fangate-slider-content:not(.move-left)");
+      if (!stepContent) {
+        return;
+      }
 
-          if (!stepContent) {
-            continue;
-          }
+      const activeTokens = window.resolveActiveStepTokens(stepContent)
+        .map((item) => String(item).toLowerCase())
+        .filter(Boolean);
+      const stepSignature = window.buildStepSignature(stepContent, activeTokens);
+      if (!stepSignature) {
+        return;
+      }
 
-          if (stepContent !== prevStepContent) {
-            const stepClassList = stepContent.classList;
+      const isNewStep = stepSignature !== window.__glazerCurrentStepSignature;
+      if (isNewStep) {
+        window.__glazerCurrentStepSignature = stepSignature;
+        window.__glazerCurrentStepTokens = activeTokens;
+        window.__glazerEmailNeedsPlaywrightTyping = false;
+        window.__glazerEmailAttemptedInCurrentStep = false;
+        window.__glazerEmailActionLockUntil = 0;
+        window.__glazerEmailState = "idle";
+        window.recordStepAction("step_transition", {
+          signature: stepSignature,
+          tokens: activeTokens,
+          gate_type: window.hypedditGateConfig?.gate_type || "",
+          is_skippable: Boolean(window.hypedditGateConfig?.is_skippable),
+        });
+      }
 
-            if (stepClassList.contains("tk|ig")) {
-              window.handleTikTok();
-            }
+      if (!activeTokens.includes("email")) {
+        window.__glazerEmailNeedsPlaywrightTyping = false;
+        window.__glazerEmailAttemptedInCurrentStep = false;
+        window.__glazerEmailState = "idle";
+      }
+    };
 
-            if (stepClassList.contains("sp|ig|email")) {
-              window.handleMultiPortal();
-            }
+    const callback = () => {
+      processCurrentStep();
+    };
 
-            if (stepClassList.contains("email|sc")) {
-              window.handleEmailSoundCloud();
-            }
+    const runRepoStyleCycle = () => {
+      if (window.__glazerRepoCycleRunning) {
+        return;
+      }
 
-            if (stepClassList.contains("sc|yt")) {
-              window.handleSoundCloudYoutube();
-            }
+      window.__glazerRepoCycleRunning = true;
+      try {
+        processCurrentStep();
+        const detected = window.detectVisibleChallenge();
 
-            if (stepClassList.contains("dn")) {
-              window.handleDonate();
-            }
-
-            if (stepClassList.contains("sc")) {
-              window.handleSoundCloud();
-            }
-
-            if (stepClassList.contains("ig")) {
-              window.handleInstagram();
-            }
-
-            if (stepClassList.contains("dw")) {
-              window.handleDownload();
-            }
-
-            if (stepClassList.contains("yt")) {
-              window.handleYoutube();
-            }
-
-            if (stepClassList.contains("sp")) {
-              window.handleSpotify();
-            }
-
-            if (stepClassList.contains("email")) {
-              window.handleEmail();
-            }
-
-            if (stepClassList.contains("tk")) {
-              window.handleTikTok();
-            }
-
-            if (stepClassList.contains("fb")) {
-              window.handleFacebook();
-            }
-
-            if (stepClassList.contains("mc")) {
-              window.handleMixcloud();
-            }
-
-            if (stepClassList.contains("bc")) {
-              window.handleBandCamp();
-            }
-          }
-
-          prevStepContent = stepContent;
+        if (!detected) {
+          window.__glazerLastDetectedChallengeType = "";
+          return;
         }
+
+        if (window.__glazerLastDetectedChallengeType !== detected.type) {
+          window.__glazerLastDetectedChallengeType = detected.type;
+          window.recordStepAction("repo_challenge_detected", {
+            type: detected.type,
+            step_signature: window.__glazerCurrentStepSignature,
+          });
+        }
+
+        const handled = window.handleDetectedChallenge(detected.type, detected.element);
+        if (handled) {
+          window.recordStepAction("repo_challenge_handled", {
+            type: detected.type,
+            step_signature: window.__glazerCurrentStepSignature,
+          });
+        }
+      } finally {
+        window.__glazerRepoCycleRunning = false;
       }
     };
 
     const observer = new MutationObserver(callback);
     observer.observe(targetNode, config);
+    processCurrentStep();
+
+    if (window.__glazerRepoLoopTimer !== null) {
+      window.clearInterval(window.__glazerRepoLoopTimer);
+    }
+    const cycleIntervalMs = Math.max(900, Number(window.hypedditSettings.click_delay_in_ms || 0) + 850);
+    window.__glazerRepoLoopTimer = window.setInterval(runRepoStyleCycle, cycleIntervalMs);
+    window.setTimeout(runRepoStyleCycle, 280);
 
     const _start = () => {
       if (document.getElementById("downloadProcess") !== null) {
-        document.getElementById("downloadProcess").click();
+        window.queueClick(document.getElementById("downloadProcess"));
       }
     };
 
@@ -907,23 +1074,123 @@ async function injectBypassScript(
     emailText: injectedEmail,
     useAppSoundCloud: injectedUseAppSoundCloudConnection,
     useAppSpotify: injectedUseAppSpotifyConnection,
+    clickDelayInMs: injectedClickDelayMs,
   });
+}
+
+function startEmailTypingTestWatcher(page, userName, userEmail) {
+  let active = true;
+  const PER_KEY_DELAY_MS = 5;
+  const WAIT_BEFORE_SHARE_CLICK_MS = 5000;
+
+  async function shouldRun() {
+    try {
+      return await page.evaluate(() => ({
+        needsTyping: Boolean(window.__glazerEmailNeedsPlaywrightTyping),
+        emailState: typeof window.__glazerEmailState === "string"
+          ? window.__glazerEmailState
+          : "idle",
+      }));
+    } catch {
+      return { needsTyping: false, emailState: "idle" };
+    }
+  }
+
+  const task = (async () => {
+    while (active) {
+      if (page.isClosed()) {
+        break;
+      }
+
+      const gateEmailState = await shouldRun();
+      if (!gateEmailState.needsTyping || gateEmailState.emailState !== "awaiting_playwright") {
+        await page.waitForTimeout(180);
+        continue;
+      }
+
+      try {
+        const nameInput = page.locator("#email_name").first();
+        const emailInput = page.locator("#email_address").first();
+        const submitButton = page.locator("#email_to_downloads_next").first();
+
+        if (await nameInput.count()) {
+          await nameInput.click({ timeout: 2000 });
+          await page.keyboard.press("Control+A");
+          await page.keyboard.press("Backspace");
+          if (userName) {
+            await nameInput.type(userName, { delay: PER_KEY_DELAY_MS });
+          }
+        }
+
+        if (await emailInput.count()) {
+          await emailInput.click({ timeout: 2000 });
+          await page.keyboard.press("Control+A");
+          await page.keyboard.press("Backspace");
+          if (userEmail) {
+            await emailInput.type(userEmail, { delay: PER_KEY_DELAY_MS });
+          }
+        }
+
+        await page.waitForTimeout(WAIT_BEFORE_SHARE_CLICK_MS);
+
+        let didClickSubmit = false;
+        if (await submitButton.count()) {
+          await submitButton.click({ delay: 50, timeout: 2500 });
+          didClickSubmit = true;
+          process.stdout.write("__LOG__:email_typing_test per_key_ms=5 pre_click_wait_ms=5000\n");
+        }
+
+        if (didClickSubmit) {
+          await page.evaluate(() => {
+            window.__glazerEmailNeedsPlaywrightTyping = false;
+            window.__glazerEmailState = "submitted";
+            if (window.__glazerRepoDone && typeof window.__glazerRepoDone === "object") {
+              window.__glazerRepoDone.email = true;
+            }
+            if (typeof window.recordStepAction === "function") {
+              window.recordStepAction("email_submitted_by_playwright", {
+                mode: "typing_test_5ms_5000ms",
+              });
+            }
+          });
+        } else {
+          await page.waitForTimeout(220);
+        }
+      } catch {
+        await page.waitForTimeout(250);
+      }
+    }
+  })();
+
+  return {
+    stop() {
+      active = false;
+    },
+    task,
+  };
+}
+
+async function emitStepTrace(page, label) {
+  try {
+    const serializedTrace = await page.evaluate((traceLabel) => {
+      const entries = Array.isArray(window.__glazerStepActionLog)
+        ? window.__glazerStepActionLog.slice(-30)
+        : [];
+      return JSON.stringify({ label: traceLabel, entries });
+    }, String(label || "runtime"));
+    process.stdout.write(`__LOG__:gate_step_trace=${serializedTrace}\n`);
+  } catch {
+    // Ignore trace serialization errors.
+  }
 }
 
 (async () => {
   fs.mkdirSync(profileDir, { recursive: true });
   fs.mkdirSync(outputFolder, { recursive: true });
-  const usePlaywrightSessionFromSettings = useAppSoundCloudConnection || useAppSpotifyConnection;
-  if (!usePlaywrightSessionFromSettings) {
-    purgeRestoredTabsState(profileDir);
-  }
+  const preloadPlaywrightSessions = useAppSoundCloudConnection || useAppSpotifyConnection;
+  const context = await launchContextWithBrowserFallback(profileDir, headless);
 
-  const defaultBrowserHint = detectDefaultBrowserHint();
-  let context = null;
-
-  if (usePlaywrightSessionFromSettings) {
-    context = await launchContextWithBrowserFallback(profileDir, headless, defaultBrowserHint);
-
+  if (preloadPlaywrightSessions) {
     const missingProviders = [];
     if (useAppSoundCloudConnection) {
       const hasSoundCloudSession = await hasAuthenticatedSoundCloudSession(context);
@@ -947,22 +1214,9 @@ async function injectBypassScript(
       process.exit(5);
     }
 
-    process.stdout.write("__LOG__:Using Playwright profile session from settings.\n");
+    process.stdout.write("__LOG__:Using Playwright profile with preloaded sessions check enabled.\n");
   } else {
-    context = await tryLaunchWithSystemProfileSession(
-      defaultBrowserHint,
-      headless,
-      false,
-    );
-
-    if (!context) {
-      const seeded = seedPlaywrightProfileFromSystemSession(profileDir, defaultBrowserHint);
-      process.stdout.write(
-        `__LOG__:system_profile_seeded=${seeded}\n`,
-      );
-
-      context = await launchContextWithBrowserFallback(profileDir, headless, defaultBrowserHint);
-    }
+    process.stdout.write("__LOG__:Using Playwright profile only (preload sessions check disabled).\n");
   }
 
   process.stdout.write("__PROGRESS__:browser_ready\n");
@@ -992,20 +1246,33 @@ async function injectBypassScript(
 
   process.stdout.write(`__LOG__:hypeddit_target_input=${hypedditUrl}\n`);
 
-  const soundCloudReady = useAppSoundCloudConnection
-    ? true
-    : await ensureSoundCloudSession(context, page, headless);
-  if (!soundCloudReady) {
-    process.stdout.write("__ERROR__:Aucune session SoundCloud mémorisée dans le profil Playwright. Désactive le mode headless et connecte-toi une première fois, puis relance.\n");
-    await context.close();
-    process.exit(4);
-  }
-
   const downloadPromise = page.waitForEvent("download", { timeout: downloadStartTimeoutMs });
   process.stdout.write("__PROGRESS__:gate_running\n");
 
   await page.goto(hypedditUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   process.stdout.write(`__LOG__:hypeddit_target_after_goto=${page.url()}\n`);
+
+  const gateMeta = await page.evaluate(() => {
+    const read = (id) => {
+      const node = document.getElementById(id);
+      if (!node) {
+        return "";
+      }
+      const value = node.value;
+      return typeof value === "string" ? value.trim() : "";
+    };
+
+    return {
+      is_skippable: read("is_skippable"),
+      is_unlimited: read("is_unlimited"),
+      nw_steps: read("nwSteps"),
+      gate_type: read("gate_type"),
+      fangate_style: read("fangate_style"),
+      gate_id: read("current_fangate_id"),
+    };
+  });
+  process.stdout.write(`__LOG__:gate_meta=${JSON.stringify(gateMeta)}\n`);
+
   await humanPause(page, 300, 800);
 
   const startButton = page.locator("#downloadProcess").first();
@@ -1020,7 +1287,10 @@ async function injectBypassScript(
     userEmail,
     useAppSoundCloudConnection,
     useAppSpotifyConnection,
+    clickDelayMs,
   );
+
+  const emailTypingTestWatcher = startEmailTypingTestWatcher(page, userName, userEmail);
 
   let download;
   try {
@@ -1028,9 +1298,16 @@ async function injectBypassScript(
     process.stdout.write("__PROGRESS__:download_started\n");
   } catch {
     process.stdout.write("__ERROR__:Aucun telechargement detecte (timeout).\n");
+    emailTypingTestWatcher.stop();
+    await emailTypingTestWatcher.task.catch(() => {});
+    await emitStepTrace(page, "download_timeout");
     await context.close();
     process.exit(3);
   }
+
+  emailTypingTestWatcher.stop();
+  await emailTypingTestWatcher.task.catch(() => {});
+  await emitStepTrace(page, "download_started");
 
   const suggested = sanitizeFileName(download.suggestedFilename() || "track.mp3");
   let targetPath = preferredFilePath || path.join(outputFolder, suggested);

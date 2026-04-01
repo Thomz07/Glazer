@@ -37,6 +37,8 @@ struct SpotifyConfigStatus {
 struct DebugSettings {
     soundcloud_fallback_headless: bool,
     logs_enabled: bool,
+    hypeddit_click_delay_ms: i64,
+    hypeddit_preload_app_sessions: bool,
 }
 
 #[derive(Serialize)]
@@ -116,6 +118,12 @@ struct HypedditScriptResult {
 
 #[derive(Deserialize)]
 struct PlaywrightSessionLoginResult {
+    provider: String,
+    connected: bool,
+}
+
+#[derive(Deserialize)]
+struct PlaywrightSessionStatusResult {
     provider: String,
     connected: bool,
 }
@@ -777,8 +785,6 @@ fn download_hypeddit_track_to_local_folder(
     overwrite_existing: bool,
     existing_file_path: Option<String>,
 ) -> Result<HypedditDownloadResult, String> {
-    let has_soundcloud_connection = db::has_access_token(&state.db_path)?;
-
     let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
         .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
     let folder = PathBuf::from(folder_path.trim());
@@ -820,6 +826,8 @@ fn download_hypeddit_track_to_local_folder(
     let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
     let hypeddit_download_start_timeout_seconds =
         db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
+    let hypeddit_click_delay_ms = db::get_hypeddit_click_delay_ms(&state.db_path)?;
+    let hypeddit_preload_app_sessions = db::get_hypeddit_preload_app_sessions(&state.db_path)?;
     let browser_profile_dir = state
         .db_path
         .parent()
@@ -838,10 +846,19 @@ fn download_hypeddit_track_to_local_folder(
         .arg(hypeddit_comment)
         .arg(hypeddit_name)
         .arg(hypeddit_email)
-        .arg(if has_soundcloud_connection { "true" } else { "false" })
-        .arg("false")
+        .arg(if hypeddit_preload_app_sessions {
+            "true"
+        } else {
+            "false"
+        })
+        .arg(if hypeddit_preload_app_sessions {
+            "true"
+        } else {
+            "false"
+        })
         .arg(browser_profile_dir.to_string_lossy().to_string())
         .arg(hypeddit_download_start_timeout_seconds.to_string())
+        .arg(hypeddit_click_delay_ms.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)
@@ -1124,10 +1141,97 @@ fn connect_playwright_profile_session(
 }
 
 #[tauri::command]
+fn get_playwright_profile_session_status(
+    state: State<AppState>,
+    provider: String,
+) -> Result<bool, String> {
+    let provider = provider.trim().to_lowercase();
+    if provider != "soundcloud" && provider != "spotify" {
+        return Err("Provider Playwright invalide (soundcloud ou spotify attendu).".to_string());
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
+        .to_path_buf();
+    let script_path = project_root.join("scripts").join("playwright-session-status.mjs");
+
+    if !script_path.exists() {
+        return Err(format!(
+            "Script Playwright de status introuvable: {}",
+            script_path.display()
+        ));
+    }
+
+    let browser_profile_dir = state
+        .db_path
+        .parent()
+        .map(|path| path.join("playwright-hypeddit-profile"))
+        .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
+    std::fs::create_dir_all(&browser_profile_dir)
+        .map_err(|error| format!("Impossible de préparer le profil navigateur Playwright: {error}"))?;
+
+    let mut child = Command::new("node")
+        .arg(script_path)
+        .arg(provider.as_str())
+        .arg(browser_profile_dir.to_string_lossy().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .current_dir(project_root)
+        .spawn()
+        .map_err(|error| format!("Impossible de lancer la vérification Playwright: {error}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Impossible de lire la sortie de la vérification Playwright".to_string())?;
+    let reader = BufReader::new(stdout);
+
+    let mut result_payload: Option<String> = None;
+    let mut script_error: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("Lecture vérification Playwright impossible: {error}"))?;
+        if let Some(value) = line.strip_prefix("__LOG__:") {
+            println!("[playwright-session-status] {value}");
+        }
+        if let Some(value) = line.strip_prefix("__ERROR__:") {
+            script_error = Some(value.to_string());
+        }
+        if let Some(value) = line.strip_prefix("__RESULT__:") {
+            result_payload = Some(value.to_string());
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Attente vérification Playwright impossible: {error}"))?;
+
+    if !status.success() {
+        if let Some(script_error) = script_error {
+            return Err(format!("Vérification Playwright en erreur: {script_error}"));
+        }
+        return Err("Vérification Playwright en erreur".to_string());
+    }
+
+    let json_payload = result_payload.ok_or_else(|| "Vérification Playwright sans résultat".to_string())?;
+    let result: PlaywrightSessionStatusResult = serde_json::from_str(json_payload.as_str())
+        .map_err(|error| format!("Réponse vérification Playwright invalide: {error}"))?;
+
+    if result.provider.trim().to_lowercase() != provider {
+        return Err("Réponse Playwright incohérente sur le provider demandé".to_string());
+    }
+
+    Ok(result.connected)
+}
+
+#[tauri::command]
 fn get_debug_settings(state: State<AppState>) -> Result<DebugSettings, String> {
     Ok(DebugSettings {
         soundcloud_fallback_headless: db::get_soundcloud_fallback_headless(&state.db_path)?,
         logs_enabled: db::get_logs_enabled(&state.db_path)?,
+        hypeddit_click_delay_ms: db::get_hypeddit_click_delay_ms(&state.db_path)?,
+        hypeddit_preload_app_sessions: db::get_hypeddit_preload_app_sessions(&state.db_path)?,
     })
 }
 
@@ -1139,6 +1243,16 @@ fn set_soundcloud_fallback_headless(state: State<AppState>, headless: bool) -> R
 #[tauri::command]
 fn set_logs_enabled(state: State<AppState>, enabled: bool) -> Result<(), String> {
     db::set_logs_enabled(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_hypeddit_click_delay_ms(state: State<AppState>, milliseconds: i64) -> Result<(), String> {
+    db::set_hypeddit_click_delay_ms(&state.db_path, milliseconds)
+}
+
+#[tauri::command]
+fn set_hypeddit_preload_app_sessions(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_hypeddit_preload_app_sessions(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -1261,9 +1375,12 @@ pub fn run() {
             reveal_local_file_in_explorer,
             check_local_file_exists,
             connect_playwright_profile_session,
+            get_playwright_profile_session_status,
             get_debug_settings,
             set_soundcloud_fallback_headless,
             set_logs_enabled,
+            set_hypeddit_click_delay_ms,
+            set_hypeddit_preload_app_sessions,
             get_misc_settings,
             set_playlist_cover_mode,
             set_download_embed_cover,

@@ -224,6 +224,8 @@ export const es = {
   connectedAs: "Conectado como",
   connected: "Conectado",
   debugTitle: "Debug",
+  debugHypedditPreloadAppSessions: "Precargar sesiones de SoundCloud y Spotify antes del gate de Hypeddit",
+  debugHypedditClickDelayMs: "Retraso entre clics de Hypeddit (ms)",
   playlistCoverModeLabel: "Fuente de portada de playlist",
   playlistCoverModeFirst: "Primera pista",
   playlistCoverModeRandom: "Aleatoria",

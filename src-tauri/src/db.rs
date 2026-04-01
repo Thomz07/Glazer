@@ -298,14 +298,6 @@ pub fn get_spotify_access_token(db_path: &Path) -> Result<Option<String>, String
     Ok(token)
 }
 
-pub fn has_spotify_access_token(db_path: &Path) -> Result<bool, String> {
-    Ok(get_spotify_access_token(db_path)?.is_some())
-}
-
-pub fn has_access_token(db_path: &Path) -> Result<bool, String> {
-    Ok(get_access_token(db_path)?.is_some())
-}
-
 pub fn clear_soundcloud_tokens(db_path: &Path) -> Result<(), String> {
     let connection = open_connection(db_path)?;
     connection
@@ -464,6 +456,73 @@ pub fn set_logs_enabled(db_path: &Path, enabled: bool) -> Result<(), String> {
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_preload_app_sessions(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_preload_app_sessions'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(true))
+}
+
+pub fn set_hypeddit_preload_app_sessions(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_preload_app_sessions', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_click_delay_ms(db_path: &Path) -> Result<i64, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_click_delay_ms'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .and_then(|item| item.trim().parse::<i64>().ok())
+        .map(|milliseconds| milliseconds.clamp(0, 5000))
+        .unwrap_or(0);
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_click_delay_ms(db_path: &Path, milliseconds: i64) -> Result<(), String> {
+    let normalized = milliseconds.clamp(0, 5000);
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_click_delay_ms', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized.to_string()],
         )
         .map_err(|error| error.to_string())?;
 

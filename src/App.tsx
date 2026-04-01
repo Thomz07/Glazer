@@ -48,7 +48,6 @@ const ASYNC_KEYS = [
   "loadingPlaylists",
   "loadingPlaylistDetails",
   "connecting",
-  "connectingSpotify",
   "connectingPlaywrightSoundcloud",
   "connectingPlaywrightSpotify",
   "savingPlaylistCoverMode",
@@ -96,6 +95,8 @@ function App() {
   const [debugSettings, setDebugSettings] = useState<DebugSettings>({
     soundcloud_fallback_headless: true,
     logs_enabled: true,
+    hypeddit_click_delay_ms: 0,
+    hypeddit_preload_app_sessions: true,
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
@@ -107,6 +108,8 @@ function App() {
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
   const [hypedditDownloadEmail, setHypedditDownloadEmail] = useState("jouch@hippo.com");
+  const [playwrightSoundcloudConnected, setPlaywrightSoundcloudConnected] = useState(false);
+  const [playwrightSpotifyConnected, setPlaywrightSpotifyConnected] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
   const [panelCoverQuality, setPanelCoverQuality] = useState<CoverQuality>("t500x500");
   const [language, setLanguage] = useState<Language>("fr");
@@ -466,6 +469,7 @@ function App() {
       loadConfigStatus(),
       loadDebugSettings(),
       loadMiscSettings(),
+      loadPlaywrightProfileSessionStatuses(),
     ]);
 
     if (soundcloud?.connected) {
@@ -509,6 +513,41 @@ function App() {
       setStatus(`${t("statusConfigError")}: ${String(error)}`);
       return null;
     }
+  }
+
+  async function loadPlaywrightProfileSessionStatus(
+    provider: "soundcloud" | "spotify",
+    silent = true,
+  ): Promise<boolean> {
+    try {
+      const connected = await invoke<boolean>("get_playwright_profile_session_status", { provider });
+      if (provider === "soundcloud") {
+        setPlaywrightSoundcloudConnected(connected);
+      } else {
+        setPlaywrightSpotifyConnected(connected);
+      }
+
+      return connected;
+    } catch (error) {
+      if (provider === "soundcloud") {
+        setPlaywrightSoundcloudConnected(false);
+      } else {
+        setPlaywrightSpotifyConnected(false);
+      }
+
+      if (!silent) {
+        setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
+      }
+
+      return false;
+    }
+  }
+
+  async function loadPlaywrightProfileSessionStatuses(silent = true) {
+    await Promise.all([
+      loadPlaywrightProfileSessionStatus("soundcloud", silent),
+      loadPlaywrightProfileSessionStatus("spotify", silent),
+    ]);
   }
 
   async function loadPlaylists() {
@@ -685,6 +724,28 @@ function App() {
     }
   }
 
+  async function saveHypedditClickDelayMs(milliseconds: number) {
+    const normalized = Number.isFinite(milliseconds)
+      ? Math.min(5000, Math.max(0, Math.round(milliseconds)))
+      : 0;
+
+    try {
+      await invoke("set_hypeddit_click_delay_ms", { milliseconds: normalized });
+      setDebugSettings((current) => ({ ...current, hypeddit_click_delay_ms: normalized }));
+    } catch (error) {
+      setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditPreloadAppSessions(enabled: boolean) {
+    try {
+      await invoke("set_hypeddit_preload_app_sessions", { enabled });
+      setDebugSettings((current) => ({ ...current, hypeddit_preload_app_sessions: enabled }));
+    } catch (error) {
+      setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+    }
+  }
+
   async function savePlaylistCoverMode(mode: PlaylistCoverMode) {
     try {
       setAsyncState("savingPlaylistCoverMode", true);
@@ -761,6 +822,11 @@ function App() {
     setAsyncState(asyncKey, true);
     try {
       await invoke("connect_playwright_profile_session", { provider });
+      if (provider === "soundcloud") {
+        setPlaywrightSoundcloudConnected(true);
+      } else {
+        setPlaywrightSpotifyConnected(true);
+      }
       setStatus(
         provider === "soundcloud"
           ? t("statusPlaywrightSessionSoundcloudReady")
@@ -2122,6 +2188,8 @@ function App() {
             connecting={asyncState.connecting}
             connectingPlaywrightSoundcloud={asyncState.connectingPlaywrightSoundcloud}
             connectingPlaywrightSpotify={asyncState.connectingPlaywrightSpotify}
+            playwrightSoundcloudConnected={playwrightSoundcloudConnected}
+            playwrightSpotifyConnected={playwrightSpotifyConnected}
             configStatus={configStatus}
             debugSettings={debugSettings}
             onThemeChange={onThemeChange}
@@ -2201,6 +2269,16 @@ function App() {
             }}
             onSaveLogsEnabled={(enabled) => {
               saveLogsEnabled(enabled).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditClickDelayMs={(milliseconds) => {
+              saveHypedditClickDelayMs(milliseconds).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
+            onSaveHypedditPreloadAppSessions={(enabled) => {
+              saveHypedditPreloadAppSessions(enabled).catch((error) => {
                 setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
               });
             }}

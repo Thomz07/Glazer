@@ -32,6 +32,8 @@ type SettingsViewProps = {
   connecting: boolean;
   connectingPlaywrightSoundcloud: boolean;
   connectingPlaywrightSpotify: boolean;
+  playwrightSoundcloudConnected: boolean;
+  playwrightSpotifyConnected: boolean;
   configStatus: SoundCloudConfigStatus | null;
   debugSettings: DebugSettings;
   onThemeChange: (mode: ThemeMode) => void;
@@ -54,6 +56,8 @@ type SettingsViewProps = {
   onConnectPlaywrightSpotify: () => void;
   onSaveFallbackHeadless: (enabled: boolean) => void;
   onSaveLogsEnabled: (enabled: boolean) => void;
+  onSaveHypedditClickDelayMs: (milliseconds: number) => void;
+  onSaveHypedditPreloadAppSessions: (enabled: boolean) => void;
 };
 
 export function SettingsView({
@@ -79,6 +83,8 @@ export function SettingsView({
   connecting,
   connectingPlaywrightSoundcloud,
   connectingPlaywrightSpotify,
+  playwrightSoundcloudConnected,
+  playwrightSpotifyConnected,
   configStatus,
   debugSettings,
   onThemeChange,
@@ -101,8 +107,20 @@ export function SettingsView({
   onConnectPlaywrightSpotify,
   onSaveFallbackHeadless,
   onSaveLogsEnabled,
+  onSaveHypedditClickDelayMs,
+  onSaveHypedditPreloadAppSessions,
 }: SettingsViewProps) {
   const soundCloudConnectedAccountName = configStatus?.connected_account_name?.trim();
+  const playwrightSoundcloudLabel = connectingPlaywrightSoundcloud
+    ? t("playwrightSessionConnecting")
+    : playwrightSoundcloudConnected
+      ? `${t("playwrightSessionConnectSoundcloud")} (${t("connected")})`
+      : t("playwrightSessionConnectSoundcloud");
+  const playwrightSpotifyLabel = connectingPlaywrightSpotify
+    ? t("playwrightSessionConnecting")
+    : playwrightSpotifyConnected
+      ? `${t("playwrightSessionConnectSpotify")} (${t("connected")})`
+      : t("playwrightSessionConnectSpotify");
 
   return (
     <>
@@ -350,12 +368,12 @@ export function SettingsView({
               className="connect-btn connect-btn-soundcloud"
               onClick={onConnectPlaywrightSoundcloud}
               disabled={connectingPlaywrightSoundcloud}
-              aria-label={connectingPlaywrightSoundcloud ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSoundcloud")}
+              aria-label={playwrightSoundcloudLabel}
             >
               <img
-                src="/brand/soundcloud-connect-official.png"
+                src={playwrightSoundcloudConnected ? "/brand/soundcloud-disconnect-official.png" : "/brand/soundcloud-connect-official.png"}
                 className="connect-btn-official-soundcloud"
-                alt={connectingPlaywrightSoundcloud ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSoundcloud")}
+                alt={playwrightSoundcloudLabel}
                 draggable={false}
               />
             </button>
@@ -365,12 +383,12 @@ export function SettingsView({
               className="connect-btn connect-btn-spotify"
               onClick={onConnectPlaywrightSpotify}
               disabled={connectingPlaywrightSpotify}
-              aria-label={connectingPlaywrightSpotify ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSpotify")}
+              aria-label={playwrightSpotifyLabel}
             >
               <img
-                src="/brand/spotify-connect-official.png"
+                src={playwrightSpotifyConnected ? "/brand/spotify-disconnect-official.png" : "/brand/spotify-connect-official.png"}
                 className="connect-btn-official-spotify"
-                alt={connectingPlaywrightSpotify ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSpotify")}
+                alt={playwrightSpotifyLabel}
                 draggable={false}
               />
             </button>
@@ -404,6 +422,33 @@ export function SettingsView({
               onChange={(event) => onSaveLogsEnabled(event.currentTarget.checked)}
             />
             <span>{t("logsEnabled")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={debugSettings.hypeddit_preload_app_sessions}
+              onChange={(event) => onSaveHypedditPreloadAppSessions(event.currentTarget.checked)}
+            />
+            <span>{t("debugHypedditPreloadAppSessions")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("debugHypedditClickDelayMs")}</span>
+            <input
+              type="number"
+              min={0}
+              max={5000}
+              step={50}
+              value={debugSettings.hypeddit_click_delay_ms}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.currentTarget.value, 10);
+                if (Number.isNaN(parsed)) {
+                  return;
+                }
+                onSaveHypedditClickDelayMs(parsed);
+              }}
+            />
           </label>
         </section>
       </div>

@@ -82,6 +82,8 @@ export type AuthStartPayload = {
 export type DebugSettings = {
   soundcloud_fallback_headless: boolean;
   logs_enabled: boolean;
+  hypeddit_click_delay_ms: number;
+  hypeddit_preload_app_sessions: boolean;
 };
 
 export type PlaylistCoverMode = "first" | "random";
