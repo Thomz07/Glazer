@@ -37,7 +37,6 @@ import type {
   SoundCloudConfigStatus,
   SpectrogramAnalysisScope,
   SpectrogramPreviewResult,
-  SpotifyConfigStatus,
   ThemeMode,
   TrackSortOrder,
   TrackViewMode,
@@ -50,6 +49,8 @@ const ASYNC_KEYS = [
   "loadingPlaylistDetails",
   "connecting",
   "connectingSpotify",
+  "connectingPlaywrightSoundcloud",
+  "connectingPlaywrightSpotify",
   "savingPlaylistCoverMode",
   "loadingPlaylistFolder",
   "scanningLocalFiles",
@@ -76,6 +77,7 @@ function App() {
     setSelectedPlaylistDetails,
     setSelectedPlaylistDetailsWithCache,
     updateSelectedPlaylistDetailsWithCache,
+    selectedTrackId,
     setSelectedTrackId,
     selectedTrackInfo,
     playlistDetailsCacheRef,
@@ -89,7 +91,6 @@ function App() {
   } = useLocalFolder();
   const { state: asyncState, setAsyncState } = useAsyncMap(ASYNC_KEYS);
   const [configStatus, setConfigStatus] = useState<SoundCloudConfigStatus | null>(null);
-  const [spotifyStatus, setSpotifyStatus] = useState<SpotifyConfigStatus | null>(null);
   const [status, setStatus] = useState("");
   const [globalPopupMessage, setGlobalPopupMessage] = useState<string | null>(null);
   const [debugSettings, setDebugSettings] = useState<DebugSettings>({
@@ -102,6 +103,7 @@ function App() {
   const [hypedditDownloadConversionFormat, setHypedditDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
   const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
+  const [hypedditDownloadStartTimeoutSeconds, setHypedditDownloadStartTimeoutSeconds] = useState(30);
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
   const [hypedditDownloadEmail, setHypedditDownloadEmail] = useState("jouch@hippo.com");
@@ -125,6 +127,7 @@ function App() {
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
   const [targetPlaylistIdForMove, setTargetPlaylistIdForMove] = useState<number | "">("");
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
+  const openTrackRequestRef = useRef(0);
 
   function applyPlaylistsSnapshot(items: Playlist[], clearSelectionWhenEmpty: boolean) {
     setPlaylists(items);
@@ -461,7 +464,6 @@ function App() {
   async function loadInitialData() {
     const [soundcloud] = await Promise.all([
       loadConfigStatus(),
-      loadSpotifyStatus(),
       loadDebugSettings(),
       loadMiscSettings(),
     ]);
@@ -506,15 +508,6 @@ function App() {
     } catch (error) {
       setStatus(`${t("statusConfigError")}: ${String(error)}`);
       return null;
-    }
-  }
-
-  async function loadSpotifyStatus() {
-    try {
-      const currentStatus = await invoke<SpotifyConfigStatus>("get_spotify_connection_status");
-      setSpotifyStatus(currentStatus);
-    } catch (error) {
-      setStatus(`${t("statusSpotifyConfigError")}: ${String(error)}`);
     }
   }
 
@@ -566,6 +559,9 @@ function App() {
       setHypedditDownloadConversionFormat(settings.hypeddit_download_conversion_format ?? "original");
       setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
+      setHypedditDownloadStartTimeoutSeconds(
+        Math.min(300, Math.max(5, Math.round(settings.hypeddit_download_start_timeout_seconds ?? 30))),
+      );
       setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
       setHypedditDownloadName(settings.hypeddit_download_name?.trim() || "Jojo");
       setHypedditDownloadEmail(settings.hypeddit_download_email?.trim() || "jouch@hippo.com");
@@ -618,6 +614,20 @@ function App() {
     try {
       await invoke("set_hypeddit_download_headless", { enabled });
       setHypedditDownloadHeadless(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadStartTimeoutSeconds(seconds: number) {
+    const normalized = Number.isFinite(seconds)
+      ? Math.min(300, Math.max(5, Math.round(seconds)))
+      : 30;
+
+    try {
+      await invoke("set_hypeddit_download_start_timeout_seconds", { seconds: normalized });
+      setHypedditDownloadStartTimeoutSeconds(normalized);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -742,56 +752,25 @@ function App() {
     await connectSoundCloud();
   }
 
-  async function connectSpotify() {
-    setStatus("");
-    setAsyncState("connectingSpotify", true);
+  async function connectPlaywrightProfileSession(provider: "soundcloud" | "spotify") {
+    const asyncKey =
+      provider === "soundcloud"
+        ? "connectingPlaywrightSoundcloud"
+        : "connectingPlaywrightSpotify";
 
+    setAsyncState(asyncKey, true);
     try {
-      const start = await invoke<AuthStartPayload>("start_spotify_auth");
-      const codeVerifier = start.code_verifier?.trim();
-      if (!codeVerifier) {
-        throw new Error("PKCE verifier manquant");
-      }
-
-      await openUrl(start.auth_url);
-      setStatus(t("statusAuthWindowSpotify"));
-
-      await invoke("complete_spotify_auth", {
-        expectedState: start.state,
-        codeVerifier,
-      });
-
-      await loadSpotifyStatus();
-      setStatus(t("statusAuthSpotifyOk"));
+      await invoke("connect_playwright_profile_session", { provider });
+      setStatus(
+        provider === "soundcloud"
+          ? t("statusPlaywrightSessionSoundcloudReady")
+          : t("statusPlaywrightSessionSpotifyReady"),
+      );
     } catch (error) {
-      setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
+      setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
     } finally {
-      setAsyncState("connectingSpotify", false);
+      setAsyncState(asyncKey, false);
     }
-  }
-
-  async function disconnectSpotify() {
-    setStatus("");
-    setAsyncState("connectingSpotify", true);
-
-    try {
-      await invoke("disconnect_spotify");
-      await loadSpotifyStatus();
-      setStatus(t("statusAuthSpotifyDisconnected"));
-    } catch (error) {
-      setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
-    } finally {
-      setAsyncState("connectingSpotify", false);
-    }
-  }
-
-  async function toggleSpotifyConnection() {
-    if (spotifyStatus?.connected) {
-      await disconnectSpotify();
-      return;
-    }
-
-    await connectSpotify();
   }
 
   async function openPlaylistDetails(playlistId: number) {
@@ -1182,6 +1161,102 @@ function App() {
     }
 
     return null;
+  }
+
+  async function ensureTrackLocalFileStillAvailable(targetTrack: PlaylistTrack) {
+    const localFilePath = targetTrack.local_file?.file_path?.trim();
+    if (!selectedPlaylistDetails || !localFilePath) {
+      return true;
+    }
+
+    try {
+      const exists = await invoke<boolean>("check_local_file_exists", { filePath: localFilePath });
+      if (exists) {
+        return true;
+      }
+
+      if (targetTrack.permalink_url) {
+        try {
+          await invoke("dissociate_playlist_track_local_file", {
+            playlistId: selectedPlaylistDetails.id,
+            trackPermalinkUrl: targetTrack.permalink_url,
+          });
+        } catch {
+          // Keep going even if backend dissociation fails; UI is still updated below.
+        }
+      }
+
+      updateSelectedPlaylistDetailsWithCache((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          tracks: current.tracks.map((trackItem) =>
+            trackItem.id === targetTrack.id
+              ? {
+                  ...trackItem,
+                  local_file: null,
+                }
+              : trackItem,
+          ),
+        };
+      });
+
+      const previousPreviewPath = spectrogramPreviewTempPathRef.current;
+      spectrogramPreviewTempPathRef.current = null;
+      setSpectrogramPreview(null);
+      setManualCutoffInputHz("");
+      setAsyncState("loadingSpectrogramPreview", false);
+      void removeTemporaryPreview(previousPreviewPath);
+
+      setOverwriteExistingHypedditDownload(false);
+
+      const message = t("localFileMissingPopup");
+      setStatus(message);
+      setGlobalPopupMessage(message);
+      return false;
+    } catch (error) {
+      setStatus(`${t("localFileCheckError")}: ${String(error)}`);
+      return false;
+    }
+  }
+
+  async function ensureSelectedTrackLocalFileStillAvailable() {
+    const currentTrack = selectedTrackInfo;
+    if (!currentTrack) {
+      return false;
+    }
+
+    return ensureTrackLocalFileStillAvailable(currentTrack);
+  }
+
+  async function runSelectedLocalFileUtility(
+    action: () => Promise<void>,
+    missingPathStatusKey: TranslationKey,
+  ) {
+    const localFilePath = selectedTrackInfo?.local_file?.file_path?.trim();
+    if (!localFilePath) {
+      setStatus(t(missingPathStatusKey));
+      return;
+    }
+
+    const localFileStillAvailable = await ensureSelectedTrackLocalFileStillAvailable();
+    if (!localFileStillAvailable) {
+      return;
+    }
+
+    await action();
+  }
+
+  async function prepareHypedditDownloadModal() {
+    const localFilePath = selectedTrackInfo?.local_file?.file_path?.trim();
+    if (!localFilePath) {
+      return false;
+    }
+
+    return ensureSelectedTrackLocalFileStillAvailable();
   }
 
   async function revealSelectedTrackLocalFileInExplorer() {
@@ -1722,13 +1797,22 @@ function App() {
   }
 
   function openTrackInfo(track: PlaylistTrack) {
-    setSelectedTrackId((currentId) => {
-      if (currentId === track.id) {
-        return null;
-      }
+    if (selectedTrackId === track.id) {
+      openTrackRequestRef.current += 1;
+      setSelectedTrackId(null);
+      return;
+    }
 
-      return track.id;
-    });
+    const requestId = openTrackRequestRef.current + 1;
+    openTrackRequestRef.current = requestId;
+
+    void (async () => {
+      await ensureTrackLocalFileStillAvailable(track);
+      if (openTrackRequestRef.current !== requestId) {
+        return;
+      }
+      setSelectedTrackId(track.id);
+    })();
   }
 
   const filteredTracks = selectedPlaylistDetails ? getFilteredTracks(selectedPlaylistDetails.tracks) : [];
@@ -1930,17 +2014,26 @@ function App() {
                     }
                   }}
                   onRevealLocalFile={() => {
-                    revealSelectedTrackLocalFileInExplorer().catch((error) => {
+                    runSelectedLocalFileUtility(
+                      () => revealSelectedTrackLocalFileInExplorer(),
+                      "localRevealFileMissingPath",
+                    ).catch((error) => {
                       setStatus(`${t("localRevealFileError")}: ${String(error)}`);
                     });
                   }}
                   onEmbedLocalCover={() => {
-                    embedSelectedTrackCoverIntoLocalMp3().catch((error) => {
+                    runSelectedLocalFileUtility(
+                      () => embedSelectedTrackCoverIntoLocalMp3(),
+                      "localRevealFileMissingPath",
+                    ).catch((error) => {
                       setStatus(`${t("localEmbedCoverError")}: ${String(error)}`);
                     });
                   }}
                   onExportSpectrogram={() => {
-                    exportSelectedTrackSpectrogram().catch((error) => {
+                    runSelectedLocalFileUtility(
+                      () => exportSelectedTrackSpectrogram(),
+                      "localRevealFileMissingPath",
+                    ).catch((error) => {
                       setStatus(`${t("localSpectrogramExportError")}: ${String(error)}`);
                     });
                   }}
@@ -1954,6 +2047,7 @@ function App() {
                       setStatus(`${t("localAssociateError")}: ${String(error)}`);
                     });
                   }}
+                  onPrepareHypedditDownloadModal={() => prepareHypedditDownloadModal()}
                   onDownloadFromHypeddit={() => {
                     downloadSelectedTrackFromHypeddit().catch((error) => {
                       setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
@@ -1965,7 +2059,14 @@ function App() {
                     });
                   }}
                   onMoveTrack={() => {
-                    moveSelectedTrackToAnotherPlaylist().catch((error) => {
+                    const action = selectedTrackInfo.local_file?.file_path
+                      ? runSelectedLocalFileUtility(
+                          () => moveSelectedTrackToAnotherPlaylist(),
+                          "localRevealFileMissingPath",
+                        )
+                      : moveSelectedTrackToAnotherPlaylist();
+
+                    action.catch((error) => {
                       setStatus(`${t("moveTrackError")}: ${String(error)}`);
                     });
                   }}
@@ -2010,6 +2111,7 @@ function App() {
             downloadEmbedCover={downloadEmbedCover}
             downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
             hypedditDownloadConversionFormat={hypedditDownloadConversionFormat}
+            hypedditDownloadStartTimeoutSeconds={hypedditDownloadStartTimeoutSeconds}
             hypedditDownloadHeadless={hypedditDownloadHeadless}
             hypedditDownloadComment={hypedditDownloadComment}
             setHypedditDownloadComment={setHypedditDownloadComment}
@@ -2018,9 +2120,9 @@ function App() {
             hypedditDownloadEmail={hypedditDownloadEmail}
             setHypedditDownloadEmail={setHypedditDownloadEmail}
             connecting={asyncState.connecting}
-            connectingSpotify={asyncState.connectingSpotify}
+            connectingPlaywrightSoundcloud={asyncState.connectingPlaywrightSoundcloud}
+            connectingPlaywrightSpotify={asyncState.connectingPlaywrightSpotify}
             configStatus={configStatus}
-            spotifyStatus={spotifyStatus}
             debugSettings={debugSettings}
             onThemeChange={onThemeChange}
             onPanelCoverQualityChange={onPanelCoverQualityChange}
@@ -2051,6 +2153,12 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            setHypedditDownloadStartTimeoutSeconds={setHypedditDownloadStartTimeoutSeconds}
+            onSaveHypedditDownloadStartTimeoutSeconds={() => {
+              saveHypedditDownloadStartTimeoutSeconds(hypedditDownloadStartTimeoutSeconds).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveHypedditDownloadHeadless={(enabled) => {
               saveHypedditDownloadHeadless(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -2076,9 +2184,14 @@ function App() {
                 setStatus(`${t("statusAuthError")}: ${String(error)}`);
               });
             }}
-            onToggleSpotify={() => {
-              toggleSpotifyConnection().catch((error) => {
-                setStatus(`${t("statusAuthSpotifyError")}: ${String(error)}`);
+            onConnectPlaywrightSoundcloud={() => {
+              connectPlaywrightProfileSession("soundcloud").catch((error) => {
+                setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
+              });
+            }}
+            onConnectPlaywrightSpotify={() => {
+              connectPlaywrightProfileSession("spotify").catch((error) => {
+                setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
               });
             }}
             onSaveFallbackHeadless={(enabled) => {

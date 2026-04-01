@@ -41,6 +41,7 @@ type TrackPanelProps = {
   onExportSpectrogram: () => void;
   onDissociateLocalFile: () => void;
   onAssociateLocalFile: () => void;
+  onPrepareHypedditDownloadModal: () => Promise<boolean>;
   onDownloadFromHypeddit: () => void;
   onDownloadCover: () => void;
   onMoveTrack: () => void;
@@ -94,6 +95,7 @@ export function TrackPanel({
   onExportSpectrogram,
   onDissociateLocalFile,
   onAssociateLocalFile,
+  onPrepareHypedditDownloadModal,
   onDownloadFromHypeddit,
   onDownloadCover,
   onMoveTrack,
@@ -113,6 +115,9 @@ export function TrackPanel({
   formatFileSize,
 }: TrackPanelProps) {
   const [showHypedditDownloadModal, setShowHypedditDownloadModal] = useState(false);
+  const [showHypedditOverwriteOption, setShowHypedditOverwriteOption] = useState(false);
+  const [hypedditModalShouldAutoClose, setHypedditModalShouldAutoClose] = useState(false);
+  const [hypedditDownloadStarted, setHypedditDownloadStarted] = useState(false);
   const [showMoveTrackModal, setShowMoveTrackModal] = useState(false);
 
   useEffect(() => {
@@ -121,15 +126,53 @@ export function TrackPanel({
     }
   }, [availableMoveTargetPlaylists.length]);
 
+  useEffect(() => {
+    if (!showHypedditDownloadModal || !hypedditModalShouldAutoClose) {
+      return;
+    }
+
+    if (downloadingFromHypeddit) {
+      if (!hypedditDownloadStarted) {
+        setHypedditDownloadStarted(true);
+      }
+      return;
+    }
+
+    if (!hypedditDownloadStarted) {
+      return;
+    }
+
+    setShowHypedditDownloadModal(false);
+    setShowHypedditOverwriteOption(false);
+    setOverwriteExistingHypedditDownload(false);
+    setHypedditModalShouldAutoClose(false);
+    setHypedditDownloadStarted(false);
+  }, [
+    showHypedditDownloadModal,
+    hypedditModalShouldAutoClose,
+    hypedditDownloadStarted,
+    downloadingFromHypeddit,
+    setOverwriteExistingHypedditDownload,
+  ]);
+
   function closeMoveTrackModal() {
     setShowMoveTrackModal(false);
   }
 
   function closeHypedditDownloadModal() {
     setShowHypedditDownloadModal(false);
+    setShowHypedditOverwriteOption(false);
+    setHypedditModalShouldAutoClose(false);
+    setHypedditDownloadStarted(false);
     if (!downloadingFromHypeddit) {
       setOverwriteExistingHypedditDownload(false);
     }
+  }
+
+  async function openHypedditDownloadModal() {
+    const shouldShowOverwrite = await onPrepareHypedditDownloadModal();
+    setShowHypedditOverwriteOption(shouldShowOverwrite);
+    setShowHypedditDownloadModal(true);
   }
 
   return (
@@ -168,7 +211,9 @@ export function TrackPanel({
             {canDownloadSelectedTrackFromHypeddit ? (
               <button
                 type="button"
-                onClick={() => setShowHypedditDownloadModal(true)}
+                onClick={() => {
+                  void openHypedditDownloadModal();
+                }}
                 disabled={downloadingFromHypeddit}
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
@@ -247,7 +292,10 @@ export function TrackPanel({
               </button>
               <button
                 type="button"
-                onClick={onDownloadFromHypeddit}
+                onClick={() => {
+                  setHypedditModalShouldAutoClose(true);
+                  onDownloadFromHypeddit();
+                }}
                 disabled={!canDownloadSelectedTrackFromHypeddit || downloadingFromHypeddit}
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadConfirm")}
@@ -255,8 +303,6 @@ export function TrackPanel({
             </>
           )}
         >
-          <p className="centered-modal-note">{t("hypedditDownloadModalDescription")}</p>
-
           <label className="setting-toggle actions-option">
             <input
               type="checkbox"
@@ -277,7 +323,7 @@ export function TrackPanel({
             <span>{t("downloadEmbedCoverSetting")}</span>
           </label>
 
-          {selectedTrackInfo.local_file ? (
+          {showHypedditOverwriteOption ? (
             <>
               <p className="centered-modal-warning">{t("hypedditDownloadModalExistingFileWarning")}</p>
               <label className="setting-toggle actions-option">

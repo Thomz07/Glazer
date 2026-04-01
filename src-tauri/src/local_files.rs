@@ -120,6 +120,52 @@ pub fn write_soundcloud_url_comment_tag(file_path: &str, track_permalink_url: &s
         .map_err(|error| format!("Écriture du tag commentaire impossible: {error}"))
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AudioConversionProfile {
+    Mp3(&'static str),
+    Aac(&'static str),
+    Wav,
+    Flac,
+}
+
+impl AudioConversionProfile {
+    fn from_setting(value: &str) -> Option<Self> {
+        match value {
+            "mp3" | "mp3_320" => Some(Self::Mp3("320k")),
+            "mp3_256" => Some(Self::Mp3("256k")),
+            "mp3_192" => Some(Self::Mp3("192k")),
+            "aac_320" => Some(Self::Aac("320k")),
+            "aac_256" => Some(Self::Aac("256k")),
+            "wav" => Some(Self::Wav),
+            "flac" => Some(Self::Flac),
+            _ => None,
+        }
+    }
+
+    fn output_extension(self) -> &'static str {
+        match self {
+            Self::Mp3(_) => "mp3",
+            Self::Aac(_) => "m4a",
+            Self::Wav => "wav",
+            Self::Flac => "flac",
+        }
+    }
+
+    fn ffmpeg_args(self) -> Vec<&'static str> {
+        match self {
+            Self::Mp3(bitrate) => vec!["-vn", "-map_metadata", "0", "-codec:a", "libmp3lame", "-b:a", bitrate],
+            Self::Aac(bitrate) => vec!["-vn", "-map_metadata", "0", "-codec:a", "aac", "-b:a", bitrate, "-movflags", "+faststart"],
+            Self::Wav => vec!["-vn", "-map_metadata", "0", "-codec:a", "pcm_s16le"],
+            Self::Flac => vec!["-vn", "-map_metadata", "0", "-codec:a", "flac", "-compression_level", "8"],
+        }
+    }
+
+    fn should_replace_source_in_place(self, source_extension: &str) -> bool {
+        self.output_extension() == source_extension
+            && matches!(self, Self::Mp3(_) | Self::Aac(_))
+    }
+}
+
 pub fn convert_audio_file_with_ffmpeg(
     file_path: &str,
     target_format: &str,
@@ -135,10 +181,9 @@ pub fn convert_audio_file_with_ffmpeg(
         return Ok(None);
     }
 
-    let supported = ["mp3", "wav", "flac"];
-    if !supported.contains(&target.as_str()) {
-        return Err(format!("Format de conversion non supporte: {target}"));
-    }
+    let profile = AudioConversionProfile::from_setting(target.as_str())
+        .ok_or_else(|| format!("Format de conversion non supporte: {target}"))?;
+    let output_extension = profile.output_extension();
 
     let current_extension = source
         .extension()
@@ -146,11 +191,23 @@ pub fn convert_audio_file_with_ffmpeg(
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
 
-    if current_extension == target {
+    let replace_source_in_place = profile.should_replace_source_in_place(current_extension.as_str());
+    if current_extension == output_extension && !replace_source_in_place {
         return Ok(None);
     }
 
-    let output_path = source.with_extension(&target);
+    let output_path = if replace_source_in_place {
+        let source_stem = source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("audio");
+        let temp_file_name = format!("{source_stem}.glazer-convert.{output_extension}");
+        source.with_file_name(temp_file_name)
+    } else {
+        source.with_extension(output_extension)
+    };
+
     if output_path.exists() {
         if overwrite_existing {
             std::fs::remove_file(&output_path)
@@ -163,12 +220,19 @@ pub fn convert_audio_file_with_ffmpeg(
         }
     }
 
-    let status = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command
         .arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
         .arg("-i")
-        .arg(source)
+        .arg(source);
+
+    for arg in profile.ffmpeg_args() {
+        command.arg(arg);
+    }
+
+    let status = command
         .arg(&output_path)
         .status()
         .map_err(|error| format!("Impossible de lancer ffmpeg: {error}"))?;
@@ -181,11 +245,20 @@ pub fn convert_audio_file_with_ffmpeg(
         return Err("Le fichier converti est introuvable apres conversion.".to_string());
     }
 
-    std::fs::remove_file(source)
-        .map_err(|error| format!("Impossible de supprimer le fichier source apres conversion: {error}"))?;
+    let final_path = if replace_source_in_place {
+        std::fs::remove_file(source)
+            .map_err(|error| format!("Impossible de supprimer le fichier source apres conversion: {error}"))?;
+        std::fs::rename(&output_path, source)
+            .map_err(|error| format!("Impossible de remplacer le fichier source apres conversion: {error}"))?;
+        source.to_path_buf()
+    } else {
+        std::fs::remove_file(source)
+            .map_err(|error| format!("Impossible de supprimer le fichier source apres conversion: {error}"))?;
+        output_path
+    };
 
-    let converted_path = output_path.to_string_lossy().to_string();
-    let converted_name = output_path
+    let converted_path = final_path.to_string_lossy().to_string();
+    let converted_name = final_path
         .file_name()
         .and_then(|value| value.to_str())
         .map(|value| value.to_string())
@@ -433,7 +506,6 @@ fn read_audio_metadata(path: &Path) -> AudioMetadata {
                 .comment()
                 .and_then(parse_bitrate_kbps_from_text);
         }
-
         if let Some(cover) = tag.album_cover() {
             let mime_type: String = cover.mime_type.into();
             let encoded = base64::engine::general_purpose::STANDARD.encode(cover.data);

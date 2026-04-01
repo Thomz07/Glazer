@@ -85,7 +85,15 @@ export type DebugSettings = {
 };
 
 export type PlaylistCoverMode = "first" | "random";
-export type HypedditConversionFormat = "original" | "mp3" | "wav" | "flac";
+export type HypedditConversionFormat =
+  | "original"
+  | "mp3_320"
+  | "mp3_256"
+  | "mp3_192"
+  | "aac_320"
+  | "aac_256"
+  | "wav"
+  | "flac";
 
 export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
@@ -97,6 +105,7 @@ export type MiscSettings = {
   hypeddit_download_comment?: string;
   hypeddit_download_name?: string;
   hypeddit_download_email?: string;
+  hypeddit_download_start_timeout_seconds?: number;
 };
 
 export type PlaylistLocalFolderAssociation = {

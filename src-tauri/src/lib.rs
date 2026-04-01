@@ -50,6 +50,7 @@ struct MiscSettings {
     hypeddit_download_comment: String,
     hypeddit_download_name: String,
     hypeddit_download_email: String,
+    hypeddit_download_start_timeout_seconds: i64,
 }
 
 #[derive(Serialize, Clone)]
@@ -111,6 +112,12 @@ struct HypedditScriptResult {
     file_path: String,
     file_name: String,
     overwrote_existing: bool,
+}
+
+#[derive(Deserialize)]
+struct PlaywrightSessionLoginResult {
+    provider: String,
+    connected: bool,
 }
 
 #[derive(Serialize)]
@@ -770,15 +777,7 @@ fn download_hypeddit_track_to_local_folder(
     overwrite_existing: bool,
     existing_file_path: Option<String>,
 ) -> Result<HypedditDownloadResult, String> {
-    let has_spotify_connection = db::has_spotify_access_token(&state.db_path)?;
     let has_soundcloud_connection = db::has_access_token(&state.db_path)?;
-
-    if !has_spotify_connection {
-        return Err(
-            "Connexion Spotify requise pour automatiser les gates Hypeddit. Connecte Spotify puis recommence."
-                .to_string(),
-        );
-    }
 
     let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
         .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
@@ -819,6 +818,8 @@ fn download_hypeddit_track_to_local_folder(
     let hypeddit_comment = db::get_hypeddit_download_comment(&state.db_path)?;
     let hypeddit_name = db::get_hypeddit_download_name(&state.db_path)?;
     let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
+    let hypeddit_download_start_timeout_seconds =
+        db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
     let browser_profile_dir = state
         .db_path
         .parent()
@@ -838,8 +839,9 @@ fn download_hypeddit_track_to_local_folder(
         .arg(hypeddit_name)
         .arg(hypeddit_email)
         .arg(if has_soundcloud_connection { "true" } else { "false" })
-        .arg(if has_spotify_connection { "true" } else { "false" })
+        .arg("false")
         .arg(browser_profile_dir.to_string_lossy().to_string())
+        .arg(hypeddit_download_start_timeout_seconds.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)
@@ -864,6 +866,9 @@ fn download_hypeddit_track_to_local_folder(
                     phase: value.to_string(),
                 },
             );
+        }
+        if let Some(value) = line.strip_prefix("__LOG__:") {
+            println!("[hypeddit] {value}");
         }
         if let Some(value) = line.strip_prefix("__ERROR__:") {
             script_error = Some(value.to_string());
@@ -1023,6 +1028,102 @@ fn reveal_local_file_in_explorer(file_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn check_local_file_exists(file_path: String) -> Result<bool, String> {
+    let trimmed_path = file_path.trim();
+    if trimmed_path.is_empty() {
+        return Ok(false);
+    }
+
+    let target_path = Path::new(trimmed_path);
+    Ok(target_path.exists() && target_path.is_file())
+}
+
+#[tauri::command]
+fn connect_playwright_profile_session(
+    state: State<AppState>,
+    provider: String,
+) -> Result<(), String> {
+    let provider = provider.trim().to_lowercase();
+    if provider != "soundcloud" && provider != "spotify" {
+        return Err("Provider Playwright invalide (soundcloud ou spotify attendu).".to_string());
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
+        .to_path_buf();
+    let script_path = project_root.join("scripts").join("playwright-session-login.mjs");
+
+    if !script_path.exists() {
+        return Err(format!(
+            "Script Playwright de connexion introuvable: {}",
+            script_path.display()
+        ));
+    }
+
+    let browser_profile_dir = state
+        .db_path
+        .parent()
+        .map(|path| path.join("playwright-hypeddit-profile"))
+        .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
+    std::fs::create_dir_all(&browser_profile_dir)
+        .map_err(|error| format!("Impossible de préparer le profil navigateur Playwright: {error}"))?;
+
+    let mut child = Command::new("node")
+        .arg(script_path)
+        .arg(provider.as_str())
+        .arg(browser_profile_dir.to_string_lossy().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .current_dir(project_root)
+        .spawn()
+        .map_err(|error| format!("Impossible de lancer la connexion Playwright: {error}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Impossible de lire la sortie de la connexion Playwright".to_string())?;
+    let reader = BufReader::new(stdout);
+
+    let mut result_payload: Option<String> = None;
+    let mut script_error: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("Lecture connexion Playwright impossible: {error}"))?;
+        if let Some(value) = line.strip_prefix("__LOG__:") {
+            println!("[playwright-session] {value}");
+        }
+        if let Some(value) = line.strip_prefix("__ERROR__:") {
+            script_error = Some(value.to_string());
+        }
+        if let Some(value) = line.strip_prefix("__RESULT__:") {
+            result_payload = Some(value.to_string());
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Attente connexion Playwright impossible: {error}"))?;
+
+    if !status.success() {
+        if let Some(script_error) = script_error {
+            return Err(format!("Connexion Playwright en erreur: {script_error}"));
+        }
+        return Err("Connexion Playwright en erreur".to_string());
+    }
+
+    let json_payload = result_payload.ok_or_else(|| "Connexion Playwright sans résultat".to_string())?;
+    let result: PlaywrightSessionLoginResult = serde_json::from_str(json_payload.as_str())
+        .map_err(|error| format!("Réponse connexion Playwright invalide: {error}"))?;
+
+    if !result.connected {
+        return Err(format!("Connexion Playwright {} incomplète.", result.provider));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_debug_settings(state: State<AppState>) -> Result<DebugSettings, String> {
     Ok(DebugSettings {
         soundcloud_fallback_headless: db::get_soundcloud_fallback_headless(&state.db_path)?,
@@ -1054,6 +1155,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
         hypeddit_download_name: db::get_hypeddit_download_name(&state.db_path)?,
         hypeddit_download_email: db::get_hypeddit_download_email(&state.db_path)?,
+        hypeddit_download_start_timeout_seconds: db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?,
     })
 }
 
@@ -1105,6 +1207,11 @@ fn set_hypeddit_download_email(state: State<AppState>, email: String) -> Result<
     db::set_hypeddit_download_email(&state.db_path, email.as_str())
 }
 
+#[tauri::command]
+fn set_hypeddit_download_start_timeout_seconds(state: State<AppState>, seconds: i64) -> Result<(), String> {
+    db::set_hypeddit_download_start_timeout_seconds(&state.db_path, seconds)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     config::load_dotenv();
@@ -1152,6 +1259,8 @@ pub fn run() {
             analyze_playlist_local_audio_quality,
             download_hypeddit_track_to_local_folder,
             reveal_local_file_in_explorer,
+            check_local_file_exists,
+            connect_playwright_profile_session,
             get_debug_settings,
             set_soundcloud_fallback_headless,
             set_logs_enabled,
@@ -1164,7 +1273,8 @@ pub fn run() {
             set_hypeddit_download_headless,
             set_hypeddit_download_comment,
             set_hypeddit_download_name,
-            set_hypeddit_download_email
+            set_hypeddit_download_email,
+            set_hypeddit_download_start_timeout_seconds
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

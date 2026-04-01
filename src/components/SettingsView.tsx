@@ -6,7 +6,6 @@ import type {
   PlaylistCoverMode,
   SoundCloudConfigStatus,
   SpectrogramAnalysisScope,
-  SpotifyConfigStatus,
   ThemeMode,
 } from "../types";
 
@@ -22,6 +21,7 @@ type SettingsViewProps = {
   downloadEmbedCover: boolean;
   downloadRenameWithSoundcloudTitle: boolean;
   hypedditDownloadConversionFormat: HypedditConversionFormat;
+  hypedditDownloadStartTimeoutSeconds: number;
   hypedditDownloadHeadless: boolean;
   hypedditDownloadComment: string;
   setHypedditDownloadComment: (value: string) => void;
@@ -30,9 +30,9 @@ type SettingsViewProps = {
   hypedditDownloadEmail: string;
   setHypedditDownloadEmail: (value: string) => void;
   connecting: boolean;
-  connectingSpotify: boolean;
+  connectingPlaywrightSoundcloud: boolean;
+  connectingPlaywrightSpotify: boolean;
   configStatus: SoundCloudConfigStatus | null;
-  spotifyStatus: SpotifyConfigStatus | null;
   debugSettings: DebugSettings;
   onThemeChange: (mode: ThemeMode) => void;
   onPanelCoverQualityChange: (quality: CoverQuality) => void;
@@ -43,12 +43,15 @@ type SettingsViewProps = {
   onSaveDownloadEmbedCover: (enabled: boolean) => void;
   onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
+  setHypedditDownloadStartTimeoutSeconds: (value: number) => void;
+  onSaveHypedditDownloadStartTimeoutSeconds: () => void;
   onSaveHypedditDownloadHeadless: (enabled: boolean) => void;
   onSaveHypedditDownloadComment: () => void;
   onSaveHypedditDownloadName: () => void;
   onSaveHypedditDownloadEmail: () => void;
   onToggleSoundCloud: () => void;
-  onToggleSpotify: () => void;
+  onConnectPlaywrightSoundcloud: () => void;
+  onConnectPlaywrightSpotify: () => void;
   onSaveFallbackHeadless: (enabled: boolean) => void;
   onSaveLogsEnabled: (enabled: boolean) => void;
 };
@@ -65,6 +68,7 @@ export function SettingsView({
   downloadEmbedCover,
   downloadRenameWithSoundcloudTitle,
   hypedditDownloadConversionFormat,
+  hypedditDownloadStartTimeoutSeconds,
   hypedditDownloadHeadless,
   hypedditDownloadComment,
   setHypedditDownloadComment,
@@ -73,9 +77,9 @@ export function SettingsView({
   hypedditDownloadEmail,
   setHypedditDownloadEmail,
   connecting,
-  connectingSpotify,
+  connectingPlaywrightSoundcloud,
+  connectingPlaywrightSpotify,
   configStatus,
-  spotifyStatus,
   debugSettings,
   onThemeChange,
   onPanelCoverQualityChange,
@@ -86,17 +90,19 @@ export function SettingsView({
   onSaveDownloadEmbedCover,
   onSaveDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadConversionFormat,
+  setHypedditDownloadStartTimeoutSeconds,
+  onSaveHypedditDownloadStartTimeoutSeconds,
   onSaveHypedditDownloadHeadless,
   onSaveHypedditDownloadComment,
   onSaveHypedditDownloadName,
   onSaveHypedditDownloadEmail,
   onToggleSoundCloud,
-  onToggleSpotify,
+  onConnectPlaywrightSoundcloud,
+  onConnectPlaywrightSpotify,
   onSaveFallbackHeadless,
   onSaveLogsEnabled,
 }: SettingsViewProps) {
   const soundCloudConnectedAccountName = configStatus?.connected_account_name?.trim();
-  const spotifyConnectedAccountName = spotifyStatus?.connected_account_name?.trim();
 
   return (
     <>
@@ -204,10 +210,40 @@ export function SettingsView({
               onChange={(event) => onSaveHypedditDownloadConversionFormat(event.currentTarget.value as HypedditConversionFormat)}
             >
               <option value="original">{t("downloadConversionFormatOriginal")}</option>
-              <option value="mp3">MP3</option>
-              <option value="wav">WAV</option>
-              <option value="flac">FLAC</option>
+              <option value="mp3_320">{t("downloadConversionFormatMp3320")}</option>
+              <option value="mp3_256">{t("downloadConversionFormatMp3256")}</option>
+              <option value="mp3_192">{t("downloadConversionFormatMp3192")}</option>
+              <option value="aac_320">{t("downloadConversionFormatAac320")}</option>
+              <option value="aac_256">{t("downloadConversionFormatAac256")}</option>
+              <option value="wav">{t("downloadConversionFormatWav")}</option>
+              <option value="flac">{t("downloadConversionFormatFlac")}</option>
             </select>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadStartTimeoutSecondsLabel")}</span>
+            <input
+              type="number"
+              min={5}
+              max={300}
+              step={1}
+              value={hypedditDownloadStartTimeoutSeconds}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.currentTarget.value, 10);
+                if (Number.isNaN(parsed)) {
+                  return;
+                }
+                setHypedditDownloadStartTimeoutSeconds(parsed);
+              }}
+              onBlur={onSaveHypedditDownloadStartTimeoutSeconds}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSaveHypedditDownloadStartTimeoutSeconds();
+                  event.currentTarget.blur();
+                }
+              }}
+            />
           </label>
 
           <label className="setting-toggle auth-actions">
@@ -268,6 +304,9 @@ export function SettingsView({
         <section className="settings-card settings-card-connections">
           <h3>{t("connectionsTitle")}</h3>
 
+          <h4 className="connection-subtitle">{t("connectionsApiTitle")}</h4>
+          <p className="spectrogram-preview-meta">{t("connectionsApiHint")}</p>
+
           <div className="actions auth-actions connection-actions">
             <button
               type="button"
@@ -302,39 +341,40 @@ export function SettingsView({
             </p>
           ) : null}
 
-          <div className="actions auth-actions connection-actions connection-actions-spotify">
+          <h4 className="connection-subtitle">{t("connectionsPlaywrightTitle")}</h4>
+          <p className="spectrogram-preview-meta">{t("connectionsPlaywrightHint")}</p>
+
+          <div className="actions auth-actions connection-actions">
+            <button
+              type="button"
+              className="connect-btn connect-btn-soundcloud"
+              onClick={onConnectPlaywrightSoundcloud}
+              disabled={connectingPlaywrightSoundcloud}
+              aria-label={connectingPlaywrightSoundcloud ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSoundcloud")}
+            >
+              <img
+                src="/brand/soundcloud-connect-official.png"
+                className="connect-btn-official-soundcloud"
+                alt={connectingPlaywrightSoundcloud ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSoundcloud")}
+                draggable={false}
+              />
+            </button>
+
             <button
               type="button"
               className="connect-btn connect-btn-spotify"
-              onClick={onToggleSpotify}
-              disabled={connectingSpotify}
-              aria-label={
-                connectingSpotify
-                  ? t("connectingSpotify")
-                  : spotifyStatus?.connected
-                    ? t("disconnectSpotify")
-                    : t("connectSpotify")
-              }
+              onClick={onConnectPlaywrightSpotify}
+              disabled={connectingPlaywrightSpotify}
+              aria-label={connectingPlaywrightSpotify ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSpotify")}
             >
               <img
-                src={spotifyStatus?.connected ? "/brand/spotify-disconnect-official.png" : "/brand/spotify-connect-official.png"}
+                src="/brand/spotify-connect-official.png"
                 className="connect-btn-official-spotify"
-                alt={
-                  connectingSpotify
-                    ? t("connectingSpotify")
-                    : spotifyStatus?.connected
-                      ? t("disconnectSpotify")
-                      : t("connectSpotify")
-                }
+                alt={connectingPlaywrightSpotify ? t("playwrightSessionConnecting") : t("playwrightSessionConnectSpotify")}
                 draggable={false}
               />
             </button>
           </div>
-          {spotifyStatus?.connected ? (
-            <p className="connection-account-label">
-              {spotifyConnectedAccountName ? `${t("connectedAs")} ${spotifyConnectedAccountName}` : t("connected")}
-            </p>
-          ) : null}
         </section>
 
         <section className="settings-card">

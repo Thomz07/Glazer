@@ -581,17 +581,38 @@ pub fn get_hypeddit_download_conversion_format(db_path: &Path) -> Result<String,
 
     let normalized = value
         .map(|item| item.trim().to_ascii_lowercase())
-        .filter(|item| matches!(item.as_str(), "original" | "mp3" | "wav" | "flac"))
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "original" => "original",
+                "mp3" | "mp3_320" => "mp3_320",
+                "mp3_256" => "mp3_256",
+                "mp3_192" => "mp3_192",
+                "aac_320" => "aac_320",
+                "aac_256" => "aac_256",
+                "wav" => "wav",
+                "flac" => "flac",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
         .unwrap_or_else(|| "original".to_string());
 
     Ok(normalized)
 }
 
 pub fn set_hypeddit_download_conversion_format(db_path: &Path, format: &str) -> Result<(), String> {
-    let normalized = format.trim().to_ascii_lowercase();
-    if !matches!(normalized.as_str(), "original" | "mp3" | "wav" | "flac") {
-        return Err("Format de conversion Hypeddit invalide.".to_string());
-    }
+    let incoming = format.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "original" => "original",
+        "mp3" | "mp3_320" => "mp3_320",
+        "mp3_256" => "mp3_256",
+        "mp3_192" => "mp3_192",
+        "aac_320" => "aac_320",
+        "aac_256" => "aac_256",
+        "wav" => "wav",
+        "flac" => "flac",
+        _ => return Err("Format de conversion Hypeddit invalide.".to_string()),
+    };
 
     let connection = open_connection(db_path)?;
     connection
@@ -784,6 +805,42 @@ pub fn set_hypeddit_download_email(db_path: &Path, email: &str) -> Result<(), St
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_start_timeout_seconds(db_path: &Path) -> Result<i64, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_start_timeout_seconds'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .and_then(|item| item.trim().parse::<i64>().ok())
+        .map(|value| value.clamp(5, 300))
+        .unwrap_or(30);
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_start_timeout_seconds(db_path: &Path, seconds: i64) -> Result<(), String> {
+    let normalized = seconds.clamp(5, 300);
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_start_timeout_seconds', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized.to_string()],
         )
         .map_err(|error| error.to_string())?;
 
