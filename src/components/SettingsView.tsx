@@ -305,7 +305,7 @@ export function SettingsView({
           <h3>{t("connectionsTitle")}</h3>
 
           <h4 className="connection-subtitle">{t("connectionsApiTitle")}</h4>
-          <p className="spectrogram-preview-meta">{t("connectionsApiHint")}</p>
+          <p className="connection-hint">{t("connectionsApiHint")}</p>
 
           <div className="actions auth-actions connection-actions">
             <button
@@ -342,7 +342,7 @@ export function SettingsView({
           ) : null}
 
           <h4 className="connection-subtitle">{t("connectionsPlaywrightTitle")}</h4>
-          <p className="spectrogram-preview-meta">{t("connectionsPlaywrightHint")}</p>
+          <p className="connection-hint">{t("connectionsPlaywrightHint")}</p>
 
           <div className="actions auth-actions connection-actions">
             <button

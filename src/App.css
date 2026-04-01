@@ -486,22 +486,28 @@ a {
 }
 
 .connection-subtitle {
-  margin: 2px 0 6px;
+  margin: 10px 0 4px;
   font-size: 0.92rem;
+}
+
+.connection-hint {
+  margin: 0 0 10px;
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .auth-actions {
   margin-bottom: 16px;
 }
 
+.settings-card-connections .auth-actions {
+  margin-bottom: 10px;
+}
+
 .connection-actions {
   justify-content: flex-start;
   align-items: center;
   gap: 10px;
-}
-
-.connection-actions-spotify {
-  justify-content: flex-start;
 }
 
 .connect-btn {
@@ -552,7 +558,7 @@ a {
 }
 
 .connection-account-label {
-  margin: -10px 0 14px;
+  margin: 0 0 10px;
   font-size: 0.82rem;
   color: inherit;
 }
