@@ -1,4 +1,5 @@
 import { useEffect, useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 type CenteredModalProps = {
   open: boolean;
@@ -42,7 +43,11 @@ export function CenteredModal({
     return null;
   }
 
-  return (
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal((
     <div className="centered-modal-overlay" role="presentation" onClick={onClose}>
       <section
         className="centered-modal"
@@ -63,5 +68,5 @@ export function CenteredModal({
         {actions ? <footer className="centered-modal-actions">{actions}</footer> : null}
       </section>
     </div>
-  );
+  ), document.body);
 }

@@ -39,6 +39,7 @@ struct DebugSettings {
     logs_enabled: bool,
     hypeddit_click_delay_ms: i64,
     hypeddit_preload_app_sessions: bool,
+    show_ytdl_utility_button: bool,
 }
 
 #[derive(Serialize)]
@@ -133,6 +134,11 @@ struct HypedditDownloadResult {
     file_path: String,
     file_name: String,
     overwrote_existing: bool,
+}
+
+#[derive(Serialize)]
+struct YtDlDownloadResult {
+    summary: String,
 }
 
 #[derive(Serialize)]
@@ -982,6 +988,212 @@ fn download_hypeddit_track_to_local_folder(
 }
 
 #[tauri::command]
+fn download_playlist_with_ytdl(
+    state: State<AppState>,
+    playlist_id: i64,
+    track_permalink_url: String,
+    track_title: String,
+    artwork_url: Option<String>,
+    output_folder: String,
+    overwrite_existing: bool,
+    existing_file_path: Option<String>,
+) -> Result<YtDlDownloadResult, String> {
+    let track_permalink_url = track_permalink_url.trim();
+    if track_permalink_url.is_empty() {
+        return Err("URL de track vide.".to_string());
+    }
+
+    let output_folder = output_folder.trim();
+    if output_folder.is_empty() {
+        return Err("Dossier de sortie vide.".to_string());
+    }
+
+    let output_folder_path = PathBuf::from(output_folder);
+    if !output_folder_path.exists() || !output_folder_path.is_dir() {
+        return Err("Dossier de sortie introuvable.".to_string());
+    }
+
+    let normalized_track_url = local_files::normalize_soundcloud_url(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud de track invalide.".to_string())?;
+
+    let scanned = local_files::scan_audio_files(output_folder)?;
+    let already_downloaded = scanned.into_iter().any(|item| {
+        item.matched_soundcloud_url
+            .as_deref()
+            .and_then(|value| local_files::normalize_soundcloud_url(Some(value)))
+            .map(|value| value == normalized_track_url)
+            .unwrap_or(false)
+    });
+
+    if already_downloaded {
+        if !overwrite_existing {
+            return Ok(YtDlDownloadResult {
+                summary: "Track deja telechargee (dedupe)".to_string(),
+            });
+        }
+    }
+
+    if overwrite_existing {
+        if let Some(existing_path) = existing_file_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let existing = Path::new(existing_path);
+            if existing.exists() && existing.is_file() {
+                std::fs::remove_file(existing)
+                    .map_err(|error| format!("Impossible d'ecraser le fichier local existant: {error}"))?;
+            }
+        }
+    }
+
+    let ytdlp_bin = resolve_ytdlp_binary()?;
+    let mut downloaded_file_path = download_track_with_ytdlp(
+        ytdlp_bin.as_str(),
+        track_permalink_url,
+        output_folder,
+        overwrite_existing,
+    )?;
+
+    let rename_with_soundcloud_title = db::get_download_rename_with_soundcloud_title(&state.db_path)?;
+    if rename_with_soundcloud_title {
+        let downloaded_path = PathBuf::from(downloaded_file_path.as_str());
+        let extension = downloaded_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| ".mp3".to_string());
+        let renamed_file_name = format!("{}{}", sanitize_file_stem(track_title.as_str()), extension);
+        let renamed_path = output_folder_path.join(renamed_file_name);
+
+        if renamed_path != downloaded_path {
+            if renamed_path.exists() {
+                if overwrite_existing {
+                    std::fs::remove_file(&renamed_path)
+                        .map_err(|error| format!("Impossible d'ecraser le fichier renomme existant: {error}"))?;
+                } else {
+                    return Err(format!(
+                        "Un fichier existe deja avec le nom SoundCloud cible: {}",
+                        renamed_path.display()
+                    ));
+                }
+            }
+
+            std::fs::rename(&downloaded_path, &renamed_path).or_else(|_| {
+                std::fs::copy(&downloaded_path, &renamed_path)?;
+                std::fs::remove_file(&downloaded_path)
+            })
+            .map_err(|error| format!("Impossible de renommer le fichier telecharge: {error}"))?;
+
+            downloaded_file_path = renamed_path.to_string_lossy().to_string();
+        }
+    }
+
+    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
+    if embed_cover {
+        if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            local_files::embed_cover_into_mp3(downloaded_file_path.as_str(), artwork_url)?;
+        }
+    }
+
+    db::upsert_playlist_track_file_link_manual(
+        &state.db_path,
+        playlist_id,
+        track_permalink_url,
+        downloaded_file_path.as_str(),
+    )?;
+
+    let _ = local_files::write_soundcloud_url_comment_tag(
+        downloaded_file_path.as_str(),
+        normalized_track_url.as_str(),
+    );
+
+    let downloaded_file_name = Path::new(downloaded_file_path.as_str())
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(downloaded_file_path.as_str());
+
+    let summary = format!("Track telechargee: {downloaded_file_name}");
+
+    Ok(YtDlDownloadResult { summary })
+}
+
+fn resolve_ytdlp_binary() -> Result<String, String> {
+    ["yt-dlp", "yt-dl"]
+        .iter()
+        .find_map(|candidate| {
+            Command::new(candidate)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()
+                .filter(|status| status.success())
+                .map(|_| (*candidate).to_string())
+        })
+        .ok_or_else(|| "yt-dlp/yt-dl introuvable sur la machine.".to_string())
+}
+
+fn download_track_with_ytdlp(
+    ytdlp_bin: &str,
+    track_url: &str,
+    output_folder: &str,
+    overwrite_existing: bool,
+) -> Result<String, String> {
+    let output_template = Path::new(output_folder)
+        .join("%(title)s.%(ext)s")
+        .to_string_lossy()
+        .to_string();
+
+    let mut command = Command::new(ytdlp_bin);
+    command
+        .arg("--no-playlist")
+        .arg("--extract-audio")
+        .arg("--audio-format")
+        .arg("mp3")
+        .arg("--audio-quality")
+        .arg("0")
+        .arg("--no-warnings")
+        .arg("--print")
+        .arg("after_move:filepath")
+        .arg("--output")
+        .arg(output_template);
+
+    if overwrite_existing {
+        command.arg("--force-overwrites");
+    } else {
+        command.arg("--no-overwrites");
+    }
+
+    let output = command
+        .arg(track_url)
+        .output()
+        .map_err(|error| format!("Impossible de lancer yt-dlp: {error}"))?;
+
+    if !output.status.success() {
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        let message = stderr_text
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("Telechargement yt-dlp en erreur");
+        return Err(message.to_string());
+    }
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout);
+    let downloaded_file = stdout_text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| "yt-dlp n'a pas retourne de chemin de fichier".to_string())?
+        .trim()
+        .to_string();
+
+    Ok(downloaded_file)
+}
+
+#[tauri::command]
 fn reveal_local_file_in_explorer(file_path: String) -> Result<(), String> {
     let trimmed_path = file_path.trim();
     if trimmed_path.is_empty() {
@@ -1232,6 +1444,7 @@ fn get_debug_settings(state: State<AppState>) -> Result<DebugSettings, String> {
         logs_enabled: db::get_logs_enabled(&state.db_path)?,
         hypeddit_click_delay_ms: db::get_hypeddit_click_delay_ms(&state.db_path)?,
         hypeddit_preload_app_sessions: db::get_hypeddit_preload_app_sessions(&state.db_path)?,
+        show_ytdl_utility_button: db::get_show_ytdl_utility_button(&state.db_path)?,
     })
 }
 
@@ -1253,6 +1466,11 @@ fn set_hypeddit_click_delay_ms(state: State<AppState>, milliseconds: i64) -> Res
 #[tauri::command]
 fn set_hypeddit_preload_app_sessions(state: State<AppState>, enabled: bool) -> Result<(), String> {
     db::set_hypeddit_preload_app_sessions(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_show_ytdl_utility_button(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_show_ytdl_utility_button(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -1372,6 +1590,7 @@ pub fn run() {
             save_playlist_track_cutoff_analysis,
             analyze_playlist_local_audio_quality,
             download_hypeddit_track_to_local_folder,
+            download_playlist_with_ytdl,
             reveal_local_file_in_explorer,
             check_local_file_exists,
             connect_playwright_profile_session,
@@ -1381,6 +1600,7 @@ pub fn run() {
             set_logs_enabled,
             set_hypeddit_click_delay_ms,
             set_hypeddit_preload_app_sessions,
+            set_show_ytdl_utility_button,
             get_misc_settings,
             set_playlist_cover_mode,
             set_download_embed_cover,

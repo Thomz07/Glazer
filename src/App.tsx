@@ -8,6 +8,7 @@ import { PlaylistList } from "./components/PlaylistList";
 import { PlaylistDetailsView } from "./components/PlaylistDetails";
 import { SettingsView } from "./components/SettingsView";
 import { TrackPanel } from "./components/TrackPanel";
+import { CenteredModal } from "./components/CenteredModal";
 import { useAsyncMap } from "./hooks/useAsyncMap";
 import { useLocalFolder } from "./hooks/useLocalFolder";
 import { usePlaylistDetails } from "./hooks/usePlaylistDetails";
@@ -57,11 +58,13 @@ const ASYNC_KEYS = [
   "dissociatingLocalFile",
   "embeddingLocalCover",
   "downloadingFromHypeddit",
+  "downloadingFromYtDl",
   "downloadingCover",
   "exportingSpectrogram",
   "loadingSpectrogramPreview",
   "savingManualCutoff",
   "runningGlobalAudioAnalysis",
+  "downloadingPlaylistFromYtDl",
   "movingTrackBetweenPlaylists",
   "refreshingPlaylistDetails",
 ] as const;
@@ -97,6 +100,7 @@ function App() {
     logs_enabled: true,
     hypeddit_click_delay_ms: 0,
     hypeddit_preload_app_sessions: true,
+    show_ytdl_utility_button: false,
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
@@ -129,6 +133,9 @@ function App() {
   const [manualCutoffInputHz, setManualCutoffInputHz] = useState("");
   const [spectrogramPreview, setSpectrogramPreview] = useState<SpectrogramPreviewResult | null>(null);
   const [targetPlaylistIdForMove, setTargetPlaylistIdForMove] = useState<number | "">("");
+  const [showYtDlPlaylistModal, setShowYtDlPlaylistModal] = useState(false);
+  const [overwriteExistingPlaylistYtDlDownload, setOverwriteExistingPlaylistYtDlDownload] = useState(false);
+  const [ytDlPlaylistProgressLabel, setYtDlPlaylistProgressLabel] = useState("");
   const spectrogramPreviewTempPathRef = useRef<string | null>(null);
   const openTrackRequestRef = useRef(0);
 
@@ -321,6 +328,14 @@ function App() {
       void removeTemporaryPreview(cleanupPath);
     };
   }, [selectedTrackInfo?.id, spectrogramAnalysisScope]);
+
+  useEffect(() => {
+    if (!selectedPlaylistDetails) {
+      setShowYtDlPlaylistModal(false);
+      setOverwriteExistingPlaylistYtDlDownload(false);
+      setYtDlPlaylistProgressLabel("");
+    }
+  }, [selectedPlaylistDetails?.id]);
 
   useEffect(() => {
     if (!selectedTrackInfo || !selectedPlaylistDetails) {
@@ -741,6 +756,15 @@ function App() {
     try {
       await invoke("set_hypeddit_preload_app_sessions", { enabled });
       setDebugSettings((current) => ({ ...current, hypeddit_preload_app_sessions: enabled }));
+    } catch (error) {
+      setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveShowYtDlUtilityButton(enabled: boolean) {
+    try {
+      await invoke("set_show_ytdl_utility_button", { enabled });
+      setDebugSettings((current) => ({ ...current, show_ytdl_utility_button: enabled }));
     } catch (error) {
       setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
     }
@@ -1417,6 +1441,162 @@ function App() {
     }
   }
 
+  async function downloadSelectedTrackWithYtDl() {
+    if (!selectedPlaylistDetails || !selectedTrackInfo) {
+      return;
+    }
+
+    const trackPermalinkUrl = selectedTrackInfo.permalink_url?.trim();
+    if (!trackPermalinkUrl) {
+      setStatus(t("ytdlUtilityMissingTrackUrl"));
+      return;
+    }
+
+    const outputFolder = playlistFolderPath.trim();
+    if (!outputFolder || !hasAvailableLocalFolder) {
+      setStatus(t("ytdlUtilityMissingFolder"));
+      return;
+    }
+
+    try {
+      setAsyncState("downloadingFromYtDl", true);
+      const result = await invoke<{ summary: string }>("download_playlist_with_ytdl", {
+        playlistId: selectedPlaylistDetails.id,
+        trackPermalinkUrl,
+        trackTitle: selectedTrackInfo.title,
+        artworkUrl: resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url ?? null,
+        outputFolder,
+        overwriteExisting: overwriteExistingHypedditDownload,
+        existingFilePath: selectedTrackInfo.local_file?.file_path ?? null,
+      });
+
+      if (selectedPlaylistDetails) {
+        await invoke("scan_playlist_local_files", {
+          playlistId: selectedPlaylistDetails.id,
+          folderPath: outputFolder,
+        });
+
+        const details = await invoke<PlaylistDetails>("get_playlist_details", {
+          playlistId: selectedPlaylistDetails.id,
+        });
+
+        setSelectedPlaylistDetailsWithCache(details);
+        setSelectedTrackId((currentId) => {
+          if (currentId === null) {
+            return null;
+          }
+          return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+        });
+      }
+
+      setOverwriteExistingHypedditDownload(false);
+      setStatus(`${t("ytdlUtilityDone")}: ${result.summary}`);
+    } catch (error) {
+      setStatus(`${t("ytdlUtilityError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("downloadingFromYtDl", false);
+    }
+  }
+
+  function getMissingTracksForYtDlBatch() {
+    if (!selectedPlaylistDetails) {
+      return [];
+    }
+
+    return selectedPlaylistDetails.tracks.filter((track) => !track.local_file && Boolean(track.permalink_url?.trim()));
+  }
+
+  function openYtDlPlaylistModalFromActions() {
+    if (!hasAvailableLocalFolder) {
+      setStatus(t("ytdlUtilityMissingFolder"));
+      return;
+    }
+
+    const missingTracks = getMissingTracksForYtDlBatch();
+    if (missingTracks.length === 0) {
+      setStatus(t("ytdlPlaylistModalNoMissingTracks"));
+      return;
+    }
+
+    setShowYtDlPlaylistModal(true);
+  }
+
+  async function downloadMissingPlaylistTracksWithYtDl() {
+    if (!selectedPlaylistDetails) {
+      return;
+    }
+
+    const outputFolder = playlistFolderPath.trim();
+    if (!outputFolder || !hasAvailableLocalFolder) {
+      setStatus(t("ytdlUtilityMissingFolder"));
+      return;
+    }
+
+    const missingTracks = getMissingTracksForYtDlBatch();
+    if (missingTracks.length === 0) {
+      setStatus(t("ytdlPlaylistModalNoMissingTracks"));
+      return;
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    try {
+      setAsyncState("downloadingPlaylistFromYtDl", true);
+
+      for (let index = 0; index < missingTracks.length; index += 1) {
+        const track = missingTracks[index];
+        const trackPermalinkUrl = track.permalink_url?.trim();
+        if (!trackPermalinkUrl) {
+          failedCount += 1;
+          continue;
+        }
+
+        setYtDlPlaylistProgressLabel(`${index + 1}/${missingTracks.length} • ${track.title}`);
+
+        try {
+          await invoke<{ summary: string }>("download_playlist_with_ytdl", {
+            playlistId: selectedPlaylistDetails.id,
+            trackPermalinkUrl,
+            trackTitle: track.title,
+            artworkUrl: resolvePanelArtworkUrl(track.artwork_url) ?? track.artwork_url ?? null,
+            outputFolder,
+            overwriteExisting: overwriteExistingPlaylistYtDlDownload,
+            existingFilePath: track.local_file?.file_path ?? null,
+          });
+          successCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      await invoke("scan_playlist_local_files", {
+        playlistId: selectedPlaylistDetails.id,
+        folderPath: outputFolder,
+      });
+
+      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+        playlistId: selectedPlaylistDetails.id,
+      });
+      setSelectedPlaylistDetailsWithCache(details);
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
+          return null;
+        }
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+      });
+
+      setStatus(`${t("ytdlPlaylistDone")}: ${successCount}/${missingTracks.length} • ${failedCount} ${t("globalAudioAnalysisFailed")}`);
+      setShowYtDlPlaylistModal(false);
+      setOverwriteExistingPlaylistYtDlDownload(false);
+    } catch (error) {
+      setStatus(`${t("ytdlPlaylistError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("downloadingPlaylistFromYtDl", false);
+      setYtDlPlaylistProgressLabel("");
+    }
+  }
+
   function sanitizeCoverFileStem(input: string) {
     const trimmed = input.trim();
     if (!trimmed) {
@@ -1887,6 +2067,10 @@ function App() {
     Boolean(selectedTrackInfo?.associated_url) &&
     getAssociatedSource(selectedTrackInfo?.associated_url) === "hypeddit" &&
     Boolean(selectedTrackInfo?.permalink_url);
+  const canRunYtDlDownload =
+    debugSettings.show_ytdl_utility_button &&
+    hasAvailableLocalFolder &&
+    Boolean(selectedTrackInfo?.permalink_url?.trim());
   const availableMoveTargetPlaylists = selectedPlaylistDetails
     ? playlists.filter(
       (playlist) =>
@@ -1896,6 +2080,9 @@ function App() {
     : [];
   const analyzableTracksCount = selectedPlaylistDetails
     ? selectedPlaylistDetails.tracks.filter((track) => Boolean(track.local_file)).length
+    : 0;
+  const missingYtDlTracksCount = selectedPlaylistDetails
+    ? selectedPlaylistDetails.tracks.filter((track) => !track.local_file && Boolean(track.permalink_url?.trim())).length
     : 0;
   const estimatedGlobalAnalysisMinSeconds = analyzableTracksCount * 3;
   const estimatedGlobalAnalysisMaxSeconds = analyzableTracksCount * 7;
@@ -1964,6 +2151,7 @@ function App() {
                 scanningLocalFiles={asyncState.scanningLocalFiles}
                 refreshingPlaylistDetails={asyncState.refreshingPlaylistDetails}
                 runningGlobalAudioAnalysis={asyncState.runningGlobalAudioAnalysis}
+                runningPlaylistYtDlDownload={asyncState.downloadingPlaylistFromYtDl}
                 confirmGlobalAudioAnalysis={confirmGlobalAudioAnalysis}
                 overwriteExistingGlobalAnalysis={overwriteExistingGlobalAnalysis}
                 hasAvailableLocalFolder={hasAvailableLocalFolder}
@@ -2012,6 +2200,7 @@ function App() {
                   });
                 }}
                 onStartConfirmGlobalAudioAnalysis={() => setConfirmGlobalAudioAnalysis(true)}
+                onOpenYtDlPlaylistModal={openYtDlPlaylistModalFromActions}
                 onSetOverwriteExistingGlobalAnalysis={(value) => setOverwriteExistingGlobalAnalysis(value)}
                 onConfirmAndRunGlobalPlaylistAudioAnalysis={() => {
                   confirmAndRunGlobalPlaylistAudioAnalysis().catch((error) => {
@@ -2031,6 +2220,7 @@ function App() {
                 onOpenTrackInfo={openTrackInfo}
                 formatCount={formatCount}
                 formatEstimatedDuration={formatEstimatedDuration}
+                missingYtDlTracksCount={missingYtDlTracksCount}
               />
 
               {selectedTrackInfo ? (
@@ -2039,6 +2229,7 @@ function App() {
                   selectedTrackInfo={selectedTrackInfo}
                   hasAvailableLocalFolder={hasAvailableLocalFolder}
                   canDownloadSelectedTrackFromHypeddit={canDownloadSelectedTrackFromHypeddit}
+                  canRunYtDlDownload={canRunYtDlDownload}
                   overwriteExistingHypedditDownload={overwriteExistingHypedditDownload}
                   setOverwriteExistingHypedditDownload={setOverwriteExistingHypedditDownload}
                   downloadEmbedCover={downloadEmbedCover}
@@ -2063,6 +2254,7 @@ function App() {
                   exportingSpectrogram={asyncState.exportingSpectrogram}
                   dissociatingLocalFile={asyncState.dissociatingLocalFile}
                   downloadingFromHypeddit={asyncState.downloadingFromHypeddit}
+                  downloadingFromYtDl={asyncState.downloadingFromYtDl}
                   downloadingCover={asyncState.downloadingCover}
                   loadingSpectrogramPreview={asyncState.loadingSpectrogramPreview}
                   savingManualCutoff={asyncState.savingManualCutoff}
@@ -2114,9 +2306,15 @@ function App() {
                     });
                   }}
                   onPrepareHypedditDownloadModal={() => prepareHypedditDownloadModal()}
+                  onPrepareYtDlDownloadModal={() => prepareHypedditDownloadModal()}
                   onDownloadFromHypeddit={() => {
                     downloadSelectedTrackFromHypeddit().catch((error) => {
                       setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
+                    });
+                  }}
+                  onRunYtDlDownload={() => {
+                    downloadSelectedTrackWithYtDl().catch((error) => {
+                      setStatus(`${t("ytdlUtilityError")}: ${String(error)}`);
                     });
                   }}
                   onDownloadCover={() => {
@@ -2282,11 +2480,104 @@ function App() {
                 setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
               });
             }}
+            onSaveShowYtDlUtilityButton={(enabled) => {
+              saveShowYtDlUtilityButton(enabled).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
           />
         </section>
       )}
 
       {debugSettings.logs_enabled && status ? <p className="status">{status}</p> : null}
+
+      <CenteredModal
+        open={showYtDlPlaylistModal}
+        title={t("ytdlPlaylistModalTitle")}
+        closeLabel={t("close")}
+        onClose={() => {
+          if (asyncState.downloadingPlaylistFromYtDl) {
+            return;
+          }
+          setShowYtDlPlaylistModal(false);
+          setOverwriteExistingPlaylistYtDlDownload(false);
+          setYtDlPlaylistProgressLabel("");
+        }}
+        showCloseButton={false}
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setShowYtDlPlaylistModal(false);
+                setOverwriteExistingPlaylistYtDlDownload(false);
+                setYtDlPlaylistProgressLabel("");
+              }}
+              disabled={asyncState.downloadingPlaylistFromYtDl}
+            >
+              {t("globalAudioAnalysisCancel")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                downloadMissingPlaylistTracksWithYtDl().catch((error) => {
+                  setStatus(`${t("ytdlPlaylistError")}: ${String(error)}`);
+                });
+              }}
+              disabled={asyncState.downloadingPlaylistFromYtDl || missingYtDlTracksCount === 0}
+            >
+              {asyncState.downloadingPlaylistFromYtDl ? t("ytdlPlaylistRunning") : t("globalAudioAnalysisConfirm")}
+            </button>
+          </>
+        )}
+      >
+        <p className="centered-modal-note">{t("ytdlPlaylistModalDescription")}</p>
+        <p className="centered-modal-note">
+          {t("ytdlPlaylistModalCountLabel")}: {formatCount(missingYtDlTracksCount)}
+        </p>
+
+        <label className="setting-toggle actions-option">
+          <input
+            type="checkbox"
+            checked={downloadRenameWithSoundcloudTitle}
+            onChange={(event) => {
+              saveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            disabled={asyncState.downloadingPlaylistFromYtDl}
+          />
+          <span>{t("downloadRenameSetting")}</span>
+        </label>
+
+        <label className="setting-toggle actions-option">
+          <input
+            type="checkbox"
+            checked={downloadEmbedCover}
+            onChange={(event) => {
+              saveDownloadEmbedCover(event.currentTarget.checked).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            disabled={asyncState.downloadingPlaylistFromYtDl}
+          />
+          <span>{t("downloadEmbedCoverSetting")}</span>
+        </label>
+
+        <label className="setting-toggle actions-option">
+          <input
+            type="checkbox"
+            checked={overwriteExistingPlaylistYtDlDownload}
+            onChange={(event) => setOverwriteExistingPlaylistYtDlDownload(event.currentTarget.checked)}
+            disabled={asyncState.downloadingPlaylistFromYtDl}
+          />
+          <span>{t("hypedditDownloadOverwriteLabel")}</span>
+        </label>
+
+        {asyncState.downloadingPlaylistFromYtDl ? (
+          <p className="status">{ytDlPlaylistProgressLabel || t("ytdlPlaylistRunning")}</p>
+        ) : null}
+      </CenteredModal>
 
       {globalPopupMessage ? (
         <div className="global-popup" role="alert" aria-live="assertive">

@@ -12,6 +12,7 @@ type TrackPanelProps = {
   selectedTrackInfo: PlaylistTrack;
   hasAvailableLocalFolder: boolean;
   canDownloadSelectedTrackFromHypeddit: boolean;
+  canRunYtDlDownload: boolean;
   overwriteExistingHypedditDownload: boolean;
   setOverwriteExistingHypedditDownload: (value: boolean) => void;
   downloadEmbedCover: boolean;
@@ -28,6 +29,7 @@ type TrackPanelProps = {
   dissociatingLocalFile: boolean;
   associatingLocalFile: boolean;
   downloadingFromHypeddit: boolean;
+  downloadingFromYtDl: boolean;
   downloadingCover: boolean;
   loadingSpectrogramPreview: boolean;
   savingManualCutoff: boolean;
@@ -42,7 +44,9 @@ type TrackPanelProps = {
   onDissociateLocalFile: () => void;
   onAssociateLocalFile: () => void;
   onPrepareHypedditDownloadModal: () => Promise<boolean>;
+  onPrepareYtDlDownloadModal: () => Promise<boolean>;
   onDownloadFromHypeddit: () => void;
+  onRunYtDlDownload: () => void;
   onDownloadCover: () => void;
   onMoveTrack: () => void;
   onGenerateSpectrogramPreview: () => void;
@@ -66,6 +70,7 @@ export function TrackPanel({
   selectedTrackInfo,
   hasAvailableLocalFolder,
   canDownloadSelectedTrackFromHypeddit,
+  canRunYtDlDownload,
   overwriteExistingHypedditDownload,
   setOverwriteExistingHypedditDownload,
   downloadEmbedCover,
@@ -82,6 +87,7 @@ export function TrackPanel({
   dissociatingLocalFile,
   associatingLocalFile,
   downloadingFromHypeddit,
+  downloadingFromYtDl,
   downloadingCover,
   loadingSpectrogramPreview,
   savingManualCutoff,
@@ -96,7 +102,9 @@ export function TrackPanel({
   onDissociateLocalFile,
   onAssociateLocalFile,
   onPrepareHypedditDownloadModal,
+  onPrepareYtDlDownloadModal,
   onDownloadFromHypeddit,
+  onRunYtDlDownload,
   onDownloadCover,
   onMoveTrack,
   onGenerateSpectrogramPreview,
@@ -118,6 +126,10 @@ export function TrackPanel({
   const [showHypedditOverwriteOption, setShowHypedditOverwriteOption] = useState(false);
   const [hypedditModalShouldAutoClose, setHypedditModalShouldAutoClose] = useState(false);
   const [hypedditDownloadStarted, setHypedditDownloadStarted] = useState(false);
+  const [showYtDlDownloadModal, setShowYtDlDownloadModal] = useState(false);
+  const [showYtDlOverwriteOption, setShowYtDlOverwriteOption] = useState(false);
+  const [ytDlModalShouldAutoClose, setYtDlModalShouldAutoClose] = useState(false);
+  const [ytDlDownloadStarted, setYtDlDownloadStarted] = useState(false);
   const [showMoveTrackModal, setShowMoveTrackModal] = useState(false);
 
   useEffect(() => {
@@ -155,6 +167,35 @@ export function TrackPanel({
     setOverwriteExistingHypedditDownload,
   ]);
 
+  useEffect(() => {
+    if (!showYtDlDownloadModal || !ytDlModalShouldAutoClose) {
+      return;
+    }
+
+    if (downloadingFromYtDl) {
+      if (!ytDlDownloadStarted) {
+        setYtDlDownloadStarted(true);
+      }
+      return;
+    }
+
+    if (!ytDlDownloadStarted) {
+      return;
+    }
+
+    setShowYtDlDownloadModal(false);
+    setShowYtDlOverwriteOption(false);
+    setOverwriteExistingHypedditDownload(false);
+    setYtDlModalShouldAutoClose(false);
+    setYtDlDownloadStarted(false);
+  }, [
+    showYtDlDownloadModal,
+    ytDlModalShouldAutoClose,
+    ytDlDownloadStarted,
+    downloadingFromYtDl,
+    setOverwriteExistingHypedditDownload,
+  ]);
+
   function closeMoveTrackModal() {
     setShowMoveTrackModal(false);
   }
@@ -173,6 +214,22 @@ export function TrackPanel({
     const shouldShowOverwrite = await onPrepareHypedditDownloadModal();
     setShowHypedditOverwriteOption(shouldShowOverwrite);
     setShowHypedditDownloadModal(true);
+  }
+
+  function closeYtDlDownloadModal() {
+    setShowYtDlDownloadModal(false);
+    setShowYtDlOverwriteOption(false);
+    setYtDlModalShouldAutoClose(false);
+    setYtDlDownloadStarted(false);
+    if (!downloadingFromYtDl) {
+      setOverwriteExistingHypedditDownload(false);
+    }
+  }
+
+  async function openYtDlDownloadModal() {
+    const shouldShowOverwrite = await onPrepareYtDlDownloadModal();
+    setShowYtDlOverwriteOption(shouldShowOverwrite);
+    setShowYtDlDownloadModal(true);
   }
 
   return (
@@ -217,6 +274,18 @@ export function TrackPanel({
                 disabled={downloadingFromHypeddit}
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
+              </button>
+            ) : null}
+
+            {canRunYtDlDownload ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void openYtDlDownloadModal();
+                }}
+                disabled={downloadingFromYtDl}
+              >
+                {downloadingFromYtDl ? t("ytdlUtilityRunning") : t("ytdlUtilityButton")}
               </button>
             ) : null}
 
@@ -339,6 +408,74 @@ export function TrackPanel({
           ) : null}
 
           {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
+        </CenteredModal>
+
+        <CenteredModal
+          open={showYtDlDownloadModal}
+          title={t("ytdlDownloadModalTitle")}
+          closeLabel={t("close")}
+          onClose={closeYtDlDownloadModal}
+          showCloseButton={false}
+          actions={(
+            <>
+              <button
+                type="button"
+                onClick={closeYtDlDownloadModal}
+                disabled={downloadingFromYtDl}
+              >
+                {t("globalAudioAnalysisCancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setYtDlModalShouldAutoClose(true);
+                  onRunYtDlDownload();
+                }}
+                disabled={!canRunYtDlDownload || downloadingFromYtDl}
+              >
+                {downloadingFromYtDl ? t("ytdlUtilityRunning") : t("hypedditDownloadConfirm")}
+              </button>
+            </>
+          )}
+        >
+          <p className="centered-modal-note">{t("ytdlDownloadModalDescription")}</p>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={downloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              disabled={downloadingFromYtDl}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={downloadEmbedCover}
+              onChange={(event) => onSaveDownloadEmbedCover(event.currentTarget.checked)}
+              disabled={downloadingFromYtDl}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          {showYtDlOverwriteOption ? (
+            <>
+              <p className="centered-modal-warning">{t("ytdlDownloadModalExistingFileWarning")}</p>
+              <label className="setting-toggle actions-option">
+                <input
+                  type="checkbox"
+                  checked={overwriteExistingHypedditDownload}
+                  onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
+                  disabled={downloadingFromYtDl}
+                />
+                <span>{t("hypedditDownloadOverwriteLabel")}</span>
+              </label>
+            </>
+          ) : null}
+
+          {downloadingFromYtDl ? <p className="status">{t("ytdlUtilityRunning")}</p> : null}
         </CenteredModal>
 
         <CenteredModal

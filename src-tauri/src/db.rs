@@ -493,6 +493,37 @@ pub fn set_hypeddit_preload_app_sessions(db_path: &Path, enabled: bool) -> Resul
     Ok(())
 }
 
+pub fn get_show_ytdl_utility_button(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'show_ytdl_utility_button'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(false))
+}
+
+pub fn set_show_ytdl_utility_button(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('show_ytdl_utility_button', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 pub fn get_hypeddit_click_delay_ms(db_path: &Path) -> Result<i64, String> {
     let connection = open_connection(db_path)?;
     let value = connection

@@ -979,7 +979,7 @@ a {
 .centered-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 4000;
   background: rgba(10, 12, 16, 0.52);
   display: flex;
   align-items: center;

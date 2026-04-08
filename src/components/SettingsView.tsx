@@ -58,6 +58,7 @@ type SettingsViewProps = {
   onSaveLogsEnabled: (enabled: boolean) => void;
   onSaveHypedditClickDelayMs: (milliseconds: number) => void;
   onSaveHypedditPreloadAppSessions: (enabled: boolean) => void;
+  onSaveShowYtDlUtilityButton: (enabled: boolean) => void;
 };
 
 export function SettingsView({
@@ -109,6 +110,7 @@ export function SettingsView({
   onSaveLogsEnabled,
   onSaveHypedditClickDelayMs,
   onSaveHypedditPreloadAppSessions,
+  onSaveShowYtDlUtilityButton,
 }: SettingsViewProps) {
   const soundCloudConnectedAccountName = configStatus?.connected_account_name?.trim();
   const playwrightSoundcloudLabel = connectingPlaywrightSoundcloud
@@ -431,6 +433,15 @@ export function SettingsView({
               onChange={(event) => onSaveHypedditPreloadAppSessions(event.currentTarget.checked)}
             />
             <span>{t("debugHypedditPreloadAppSessions")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={debugSettings.show_ytdl_utility_button}
+              onChange={(event) => onSaveShowYtDlUtilityButton(event.currentTarget.checked)}
+            />
+            <span>{t("debugShowYtDlUtilityButton")}</span>
           </label>
 
           <label className="setting-toggle auth-actions">

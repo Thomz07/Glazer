@@ -84,6 +84,7 @@ export type DebugSettings = {
   logs_enabled: boolean;
   hypeddit_click_delay_ms: number;
   hypeddit_preload_app_sessions: boolean;
+  show_ytdl_utility_button: boolean;
 };
 
 export type PlaylistCoverMode = "first" | "random";

@@ -20,6 +20,7 @@ type PlaylistDetailsProps = {
   scanningLocalFiles: boolean;
   refreshingPlaylistDetails: boolean;
   runningGlobalAudioAnalysis: boolean;
+  runningPlaylistYtDlDownload: boolean;
   confirmGlobalAudioAnalysis: boolean;
   overwriteExistingGlobalAnalysis: boolean;
   hasAvailableLocalFolder: boolean;
@@ -50,6 +51,7 @@ type PlaylistDetailsProps = {
   onClearTrackFilters: () => void;
   onRefreshSelectedPlaylistDetails: () => void;
   onStartConfirmGlobalAudioAnalysis: () => void;
+  onOpenYtDlPlaylistModal: () => void;
   onSetOverwriteExistingGlobalAnalysis: (value: boolean) => void;
   onConfirmAndRunGlobalPlaylistAudioAnalysis: () => void;
   onCancelGlobalAudioAnalysis: () => void;
@@ -57,6 +59,7 @@ type PlaylistDetailsProps = {
   onOpenTrackInfo: (track: PlaylistTrack) => void;
   formatCount: (value?: number | null) => string;
   formatEstimatedDuration: (seconds: number) => string;
+  missingYtDlTracksCount: number;
 };
 
 export function PlaylistDetailsView({
@@ -69,6 +72,7 @@ export function PlaylistDetailsView({
   scanningLocalFiles,
   refreshingPlaylistDetails,
   runningGlobalAudioAnalysis,
+  runningPlaylistYtDlDownload,
   confirmGlobalAudioAnalysis,
   overwriteExistingGlobalAnalysis,
   hasAvailableLocalFolder,
@@ -99,6 +103,7 @@ export function PlaylistDetailsView({
   onClearTrackFilters,
   onRefreshSelectedPlaylistDetails,
   onStartConfirmGlobalAudioAnalysis,
+  onOpenYtDlPlaylistModal,
   onSetOverwriteExistingGlobalAnalysis,
   onConfirmAndRunGlobalPlaylistAudioAnalysis,
   onCancelGlobalAudioAnalysis,
@@ -106,6 +111,7 @@ export function PlaylistDetailsView({
   onOpenTrackInfo,
   formatCount,
   formatEstimatedDuration,
+  missingYtDlTracksCount,
 }: PlaylistDetailsProps) {
   return (
     <section className="tracks-column">
@@ -259,9 +265,21 @@ export function PlaylistDetailsView({
                   type="button"
                   className="filter-reset"
                   onClick={onStartConfirmGlobalAudioAnalysis}
-                  disabled={runningGlobalAudioAnalysis}
+                  disabled={runningGlobalAudioAnalysis || runningPlaylistYtDlDownload}
                 >
                   {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisAction")}
+                </button>
+              ) : null}
+              {hasAvailableLocalFolder && !confirmGlobalAudioAnalysis ? (
+                <button
+                  type="button"
+                  className="filter-reset"
+                  onClick={onOpenYtDlPlaylistModal}
+                  disabled={runningGlobalAudioAnalysis || runningPlaylistYtDlDownload || missingYtDlTracksCount === 0}
+                >
+                  {runningPlaylistYtDlDownload
+                    ? t("ytdlPlaylistRunning")
+                    : `${t("ytdlPlaylistMissingAction")} (${formatCount(missingYtDlTracksCount)})`}
                 </button>
               ) : null}
               {hasAvailableLocalFolder && confirmGlobalAudioAnalysis ? (
