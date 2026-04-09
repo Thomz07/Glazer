@@ -31,6 +31,8 @@ type SettingsViewProps = {
   setHypedditDownloadName: (value: string) => void;
   hypedditDownloadEmail: string;
   setHypedditDownloadEmail: (value: string) => void;
+  hypedditSoundcloudManualCookiesJson: string;
+  setHypedditSoundcloudManualCookiesJson: (value: string) => void;
   connecting: boolean;
   connectingPlaywrightSoundcloud: boolean;
   connectingPlaywrightSpotify: boolean;
@@ -54,6 +56,7 @@ type SettingsViewProps = {
   onSaveHypedditDownloadComment: () => void;
   onSaveHypedditDownloadName: () => void;
   onSaveHypedditDownloadEmail: () => void;
+  onSaveHypedditSoundcloudManualCookiesJson: () => void;
   onToggleSoundCloud: () => void;
   onConnectPlaywrightSoundcloud: () => void;
   onConnectPlaywrightSpotify: () => void;
@@ -86,6 +89,8 @@ export function SettingsView({
   setHypedditDownloadName,
   hypedditDownloadEmail,
   setHypedditDownloadEmail,
+  hypedditSoundcloudManualCookiesJson,
+  setHypedditSoundcloudManualCookiesJson,
   connecting,
   connectingPlaywrightSoundcloud,
   connectingPlaywrightSpotify,
@@ -109,6 +114,7 @@ export function SettingsView({
   onSaveHypedditDownloadComment,
   onSaveHypedditDownloadName,
   onSaveHypedditDownloadEmail,
+  onSaveHypedditSoundcloudManualCookiesJson,
   onToggleSoundCloud,
   onConnectPlaywrightSoundcloud,
   onConnectPlaywrightSpotify,
@@ -406,7 +412,6 @@ export function SettingsView({
           ) : null}
 
           <h4 className="connection-subtitle">{t("connectionsPlaywrightTitle")}</h4>
-          <p className="connection-hint">{t("connectionsPlaywrightHint")}</p>
 
           <div className="actions auth-actions connection-actions">
             <button
@@ -439,6 +444,28 @@ export function SettingsView({
               />
             </button>
           </div>
+
+          <p className="connection-hint">{t("downloadHypedditSoundcloudCookiesLabel")}</p>
+
+          <div className="connection-cookies-block auth-actions">
+            <textarea
+              rows={5}
+              value={hypedditSoundcloudManualCookiesJson}
+              placeholder={t("downloadHypedditSoundcloudCookiesPlaceholder")}
+              onChange={(event) => setHypedditSoundcloudManualCookiesJson(event.currentTarget.value)}
+              onBlur={onSaveHypedditSoundcloudManualCookiesJson}
+            />
+          </div>
+
+          <p className="connection-hint">{t("connectionsPlaywrightHint")}</p>
+          <p className="connection-hint">
+            {t("downloadHypedditSoundcloudCookiesGuide")}{" "}
+            <a href="https://cookie-editor.com/" target="_blank" rel="noreferrer">
+              Cookie-Editor
+            </a>
+            .
+          </p>
+          <p className="connection-hint">{t("downloadHypedditSoundcloudCookiesHint")}</p>
         </section>
 
         <section className="settings-card">

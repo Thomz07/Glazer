@@ -504,6 +504,17 @@ a {
   margin-bottom: 10px;
 }
 
+.connection-cookies-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connection-cookies-block textarea {
+  width: 100%;
+  min-height: 110px;
+}
+
 .connection-actions {
   justify-content: flex-start;
   align-items: center;

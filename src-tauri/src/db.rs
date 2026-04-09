@@ -1014,6 +1014,43 @@ pub fn set_hypeddit_download_email(db_path: &Path, email: &str) -> Result<(), St
     Ok(())
 }
 
+pub fn get_hypeddit_soundcloud_manual_cookies_json(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_soundcloud_manual_cookies_json'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    Ok(value.unwrap_or_default())
+}
+
+pub fn set_hypeddit_soundcloud_manual_cookies_json(
+    db_path: &Path,
+    cookies_json: &str,
+) -> Result<(), String> {
+    let normalized = cookies_json.trim().to_string();
+    if normalized.len() > 200_000 {
+        return Err("Cookies SoundCloud trop volumineux (max 200000 caracteres).".to_string());
+    }
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_soundcloud_manual_cookies_json', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 pub fn get_hypeddit_download_start_timeout_seconds(db_path: &Path) -> Result<i64, String> {
     let connection = open_connection(db_path)?;
     let value = connection

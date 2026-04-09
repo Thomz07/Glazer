@@ -15,6 +15,7 @@ const useAppSpotifyArg = process.argv[11] ?? "false";
 const profileDirArg = process.argv[12] ?? "";
 const downloadStartTimeoutSecondsArg = process.argv[13] ?? "30";
 const clickDelayMsArg = process.argv[14] ?? "0";
+const manualSoundCloudCookiesPathArg = process.argv[15] ?? "";
 
 if (!hypedditUrl) {
   console.error("Missing Hypeddit URL");
@@ -44,6 +45,7 @@ const parsedClickDelayMs = Number.parseInt(clickDelayMsArg, 10);
 const clickDelayMs = Number.isFinite(parsedClickDelayMs)
   ? Math.min(5000, Math.max(0, parsedClickDelayMs))
   : 0;
+const manualSoundCloudCookiesPath = manualSoundCloudCookiesPathArg.trim();
 
 process.stdout.write(
   `__LOG__:app_connections soundcloud=${useAppSoundCloudConnection} spotify=${useAppSpotifyConnection} headless=${headless} download_start_timeout_seconds=${downloadStartTimeoutSeconds} click_delay_ms=${clickDelayMs}\n`,
@@ -90,6 +92,127 @@ function buildCommonLaunchOptions(isHeadless) {
       "--disable-features=IsolateOrigins,site-per-process",
     ],
   };
+}
+
+function normalizeSameSiteValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "strict") {
+    return "Strict";
+  }
+  if (normalized === "none") {
+    return "None";
+  }
+  return "Lax";
+}
+
+function normalizeEpochSeconds(value) {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+
+  if (parsed <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(parsed);
+}
+
+function normalizePlaywrightCookie(rawCookie) {
+  if (!rawCookie || typeof rawCookie !== "object") {
+    return null;
+  }
+
+  const name = String(rawCookie.name ?? "").trim();
+  const value = String(rawCookie.value ?? "");
+  if (!name) {
+    return null;
+  }
+
+  const rawDomain = String(rawCookie.domain ?? "").trim();
+  const domain = rawDomain || undefined;
+  const pathValue = String(rawCookie.path ?? "/").trim() || "/";
+  const secure = Boolean(rawCookie.secure);
+  const httpOnly = Boolean(rawCookie.httpOnly);
+
+  const normalizedCookie = {
+    name,
+    value,
+    secure,
+    httpOnly,
+    sameSite: normalizeSameSiteValue(rawCookie.sameSite),
+  };
+
+  const normalizedExpires = normalizeEpochSeconds(rawCookie.expires ?? rawCookie.expirationDate);
+  if (normalizedExpires !== undefined) {
+    normalizedCookie.expires = normalizedExpires;
+  }
+
+  if (domain) {
+    normalizedCookie.domain = domain;
+    normalizedCookie.path = pathValue;
+  } else {
+    const rawUrl = String(rawCookie.url ?? "").trim();
+    if (!rawUrl) {
+      return null;
+    }
+    normalizedCookie.url = rawUrl;
+  }
+
+  return normalizedCookie;
+}
+
+async function applyManualSoundCloudCookies(context, cookiesFilePath) {
+  if (!cookiesFilePath) {
+    return false;
+  }
+
+  if (!fs.existsSync(cookiesFilePath)) {
+    process.stdout.write(`__LOG__:Manual SoundCloud cookies file missing: ${cookiesFilePath}\n`);
+    return false;
+  }
+
+  try {
+    const rawContent = fs.readFileSync(cookiesFilePath, "utf8");
+    if (!rawContent.trim()) {
+      process.stdout.write("__LOG__:Manual SoundCloud cookies file is empty.\n");
+      return false;
+    }
+
+    const parsed = JSON.parse(rawContent);
+    const rawCookies = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.cookies)
+        ? parsed.cookies
+        : [];
+    const normalizedCookies = rawCookies
+      .map((cookie) => normalizePlaywrightCookie(cookie))
+      .filter((cookie) => {
+        if (!cookie) {
+          return false;
+        }
+
+        const cookieDomain = String(cookie.domain || "").toLowerCase();
+        const cookieUrl = String(cookie.url || "").toLowerCase();
+        return cookieDomain.includes("soundcloud.com") || cookieUrl.includes("soundcloud.com");
+      });
+
+    if (normalizedCookies.length === 0) {
+      process.stdout.write("__LOG__:No usable SoundCloud cookies found in manual cookies file.\n");
+      return false;
+    }
+
+    await context.addCookies(normalizedCookies);
+    process.stdout.write(`__LOG__:Applied ${normalizedCookies.length} manual SoundCloud cookies.\n`);
+    return true;
+  } catch (error) {
+    process.stdout.write(`__LOG__:Manual SoundCloud cookies ignored: ${String(error)}\n`);
+    return false;
+  }
 }
 
 async function launchContextWithBrowserFallback(profileDirectory, isHeadless) {
@@ -257,6 +380,15 @@ async function injectBypassScript(
       .map((item) => item.trim().toLowerCase())
       .filter(Boolean);
 
+    const allStepsOrder = Array.from(document.querySelectorAll("#all_steps > div"))
+      .map((element) => {
+        const className = Array.from(element.classList || [])
+          .map((item) => String(item || "").trim().toLowerCase())
+          .find((item) => !!item && item !== "active" && item !== "done" && item !== "hidden");
+        return className || "";
+      })
+      .filter(Boolean);
+
     window.hypedditSettings = {
       email: emailText,
       name: nameText,
@@ -278,6 +410,7 @@ async function injectBypassScript(
       is_unlimited: readHiddenValue("is_unlimited") === "1",
       gate_type: readHiddenValue("gate_type"),
       nw_steps: configuredSteps,
+      all_steps_order: allStepsOrder,
     };
 
     window.__glazerQueuedClick = Promise.resolve();
@@ -681,9 +814,16 @@ async function injectBypassScript(
       const classes = Array.from(stepElement.classList || []).map((item) => String(item).toLowerCase());
       const tokens = new Set();
 
-      const configured = Array.isArray(window.hypedditGateConfig?.nw_steps)
-        ? window.hypedditGateConfig.nw_steps
-        : [];
+      const configured = [
+        ...(Array.isArray(window.hypedditGateConfig?.nw_steps)
+          ? window.hypedditGateConfig.nw_steps
+          : []),
+        ...(Array.isArray(window.hypedditGateConfig?.all_steps_order)
+          ? window.hypedditGateConfig.all_steps_order
+          : []),
+      ]
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter(Boolean);
       for (const stepCode of configured) {
         if (classes.includes(stepCode)) {
           tokens.add(stepCode);
@@ -1189,6 +1329,14 @@ async function emitStepTrace(page, label) {
   fs.mkdirSync(outputFolder, { recursive: true });
   const preloadPlaywrightSessions = useAppSoundCloudConnection || useAppSpotifyConnection;
   const context = await launchContextWithBrowserFallback(profileDir, headless);
+  const manualSoundCloudCookiesApplied = await applyManualSoundCloudCookies(
+    context,
+    manualSoundCloudCookiesPath,
+  );
+
+  if (manualSoundCloudCookiesApplied) {
+    process.stdout.write("__LOG__:Manual SoundCloud cookies loaded before gate flow.\n");
+  }
 
   if (preloadPlaywrightSessions) {
     const missingProviders = [];
@@ -1266,6 +1414,13 @@ async function emitStepTrace(page, label) {
       is_skippable: read("is_skippable"),
       is_unlimited: read("is_unlimited"),
       nw_steps: read("nwSteps"),
+      all_steps_order: Array.from(document.querySelectorAll("#all_steps > div"))
+        .map((element) => {
+          return Array.from(element.classList || [])
+            .map((item) => String(item || "").trim().toLowerCase())
+            .find((item) => !!item && item !== "active" && item !== "done" && item !== "hidden") || "";
+        })
+        .filter(Boolean),
       gate_type: read("gate_type"),
       fangate_style: read("fangate_style"),
       gate_id: read("current_fangate_id"),

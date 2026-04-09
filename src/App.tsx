@@ -115,6 +115,7 @@ function App() {
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
   const [hypedditDownloadEmail, setHypedditDownloadEmail] = useState("jouch@hippo.com");
+  const [hypedditSoundcloudManualCookiesJson, setHypedditSoundcloudManualCookiesJson] = useState("");
   const [playwrightSoundcloudConnected, setPlaywrightSoundcloudConnected] = useState(false);
   const [playwrightSpotifyConnected, setPlaywrightSpotifyConnected] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
@@ -623,6 +624,7 @@ function App() {
       setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
       setHypedditDownloadName(settings.hypeddit_download_name?.trim() || "Jojo");
       setHypedditDownloadEmail(settings.hypeddit_download_email?.trim() || "jouch@hippo.com");
+      setHypedditSoundcloudManualCookiesJson(settings.hypeddit_soundcloud_manual_cookies_json ?? "");
     } catch (error) {
       setStatus(`${t("statusMiscSettingsError")}: ${String(error)}`);
     }
@@ -729,6 +731,17 @@ function App() {
     try {
       await invoke("set_hypeddit_download_email", { email: normalized });
       setHypedditDownloadEmail(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditSoundcloudManualCookiesJson(cookiesJson: string) {
+    const normalized = cookiesJson.trim();
+    try {
+      await invoke("set_hypeddit_soundcloud_manual_cookies_json", { cookiesJson: normalized });
+      setHypedditSoundcloudManualCookiesJson(normalized);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -868,7 +881,10 @@ function App() {
 
     setAsyncState(asyncKey, true);
     try {
-      await invoke("connect_playwright_profile_session", { provider });
+      await invoke("connect_playwright_profile_session", {
+        provider,
+        resetSession: provider === "soundcloud",
+      });
       if (provider === "soundcloud") {
         setPlaywrightSoundcloudConnected(true);
       } else {
@@ -884,6 +900,26 @@ function App() {
     } finally {
       setAsyncState(asyncKey, false);
     }
+  }
+
+  async function togglePlaywrightSoundcloudConnection() {
+    if (playwrightSoundcloudConnected) {
+      setPlaywrightSoundcloudConnected(false);
+      setStatus(t("statusPlaywrightSessionSoundcloudDisconnected"));
+      return;
+    }
+
+    await connectPlaywrightProfileSession("soundcloud");
+  }
+
+  async function togglePlaywrightSpotifyConnection() {
+    if (playwrightSpotifyConnected) {
+      setPlaywrightSpotifyConnected(false);
+      setStatus(t("statusPlaywrightSessionSpotifyDisconnected"));
+      return;
+    }
+
+    await connectPlaywrightProfileSession("spotify");
   }
 
   async function openPlaylistDetails(playlistId: number) {
@@ -2437,6 +2473,8 @@ function App() {
             setHypedditDownloadName={setHypedditDownloadName}
             hypedditDownloadEmail={hypedditDownloadEmail}
             setHypedditDownloadEmail={setHypedditDownloadEmail}
+            hypedditSoundcloudManualCookiesJson={hypedditSoundcloudManualCookiesJson}
+            setHypedditSoundcloudManualCookiesJson={setHypedditSoundcloudManualCookiesJson}
             connecting={asyncState.connecting}
             connectingPlaywrightSoundcloud={asyncState.connectingPlaywrightSoundcloud}
             connectingPlaywrightSpotify={asyncState.connectingPlaywrightSpotify}
@@ -2504,18 +2542,23 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            onSaveHypedditSoundcloudManualCookiesJson={() => {
+              saveHypedditSoundcloudManualCookiesJson(hypedditSoundcloudManualCookiesJson).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onToggleSoundCloud={() => {
               toggleSoundCloudConnection().catch((error) => {
                 setStatus(`${t("statusAuthError")}: ${String(error)}`);
               });
             }}
             onConnectPlaywrightSoundcloud={() => {
-              connectPlaywrightProfileSession("soundcloud").catch((error) => {
+              togglePlaywrightSoundcloudConnection().catch((error) => {
                 setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
               });
             }}
             onConnectPlaywrightSpotify={() => {
-              connectPlaywrightProfileSession("spotify").catch((error) => {
+              togglePlaywrightSpotifyConnection().catch((error) => {
                 setStatus(`${t("statusPlaywrightSessionError")}: ${String(error)}`);
               });
             }}

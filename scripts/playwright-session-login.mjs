@@ -3,9 +3,11 @@ import { chromium } from "playwright";
 
 const providerArg = process.argv[2] ?? "";
 const profileDirArg = process.argv[3] ?? "";
+const resetSessionArg = process.argv[4] ?? "false";
 
 const provider = providerArg.trim().toLowerCase();
 const profileDir = profileDirArg.trim();
+const resetSession = resetSessionArg.trim().toLowerCase() === "true";
 
 if (!provider || (provider !== "soundcloud" && provider !== "spotify")) {
   console.error("Missing or invalid provider. Use soundcloud or spotify.");
@@ -217,6 +219,77 @@ async function isProviderConnected(currentProvider, context, page, options = {})
   return hasSpotifySession(context, page, options);
 }
 
+async function clearSoundCloudSession(context, page) {
+  try {
+    const soundCloudCookies = await context.cookies("https://soundcloud.com", "https://secure.soundcloud.com");
+    if (soundCloudCookies.length > 0) {
+      await context.addCookies(
+        soundCloudCookies.map((cookie) => ({
+          name: cookie.name,
+          value: "",
+          domain: cookie.domain,
+          path: cookie.path || "/",
+          expires: 1,
+          httpOnly: cookie.httpOnly,
+          secure: cookie.secure,
+          sameSite: cookie.sameSite,
+        })),
+      );
+    }
+  } catch {
+    // Ignore cookie cleanup failures; storage cleanup below can still help.
+  }
+
+  try {
+    await page.goto("https://soundcloud.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 45000,
+    });
+    await page.evaluate(async () => {
+      try {
+        window.localStorage?.clear();
+      } catch {
+      }
+      try {
+        window.sessionStorage?.clear();
+      } catch {
+      }
+      try {
+        if (window.indexedDB?.databases) {
+          const databases = await window.indexedDB.databases();
+          await Promise.all(
+            databases
+              .map((db) => db?.name)
+              .filter(Boolean)
+              .map((name) =>
+                new Promise((resolve) => {
+                  try {
+                    const request = window.indexedDB.deleteDatabase(name);
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => resolve();
+                    request.onblocked = () => resolve();
+                  } catch {
+                    resolve();
+                  }
+                }),
+              ),
+          );
+        }
+      } catch {
+      }
+      try {
+        if (window.caches?.keys) {
+          const keys = await window.caches.keys();
+          await Promise.all(keys.map((key) => window.caches.delete(key)));
+        }
+      } catch {
+      }
+    });
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+}
+
 (async () => {
   fs.mkdirSync(profileDir, { recursive: true });
 
@@ -227,6 +300,11 @@ async function isProviderConnected(currentProvider, context, page, options = {})
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
   });
+
+  if (provider === "soundcloud" && resetSession) {
+    process.stdout.write("__LOG__:Resetting SoundCloud Playwright session before login...\n");
+    await clearSoundCloudSession(context, page);
+  }
 
   const alreadyConnected = await isProviderConnected(provider, context, page, { navigate: true });
   if (!alreadyConnected) {

@@ -200,6 +200,13 @@ export const en = {
   downloadHypedditNamePlaceholder: "Jojo",
   downloadHypedditEmailLabel: "Hypeddit email",
   downloadHypedditEmailPlaceholder: "jouch@hippo.com",
+  downloadHypedditSoundcloudCookiesLabel: "Manual SoundCloud cookies (JSON)",
+  downloadHypedditSoundcloudCookiesPlaceholder:
+    "Paste exported SoundCloud cookies JSON here (array or { cookies: [...] })",
+  downloadHypedditSoundcloudCookiesGuide:
+    "How to get them: install the browser extension",
+  downloadHypedditSoundcloudCookiesHint:
+    "This manual cookies method is generally more reliable for Hypeddit gates and is the recommended setup. Leave empty to keep using only the Playwright connected session.",
   spectrogramScopeLabel: "Spectrogram analysis",
   spectrogramScopeQuarter: "1/4 of track",
   spectrogramScopeHalf: "1/2 of track",
@@ -252,6 +259,8 @@ export const en = {
   statusAuthSpotifyError: "Spotify auth error",
   statusPlaywrightSessionSoundcloudReady: "Playwright SoundCloud session is ready.",
   statusPlaywrightSessionSpotifyReady: "Playwright Spotify session is ready.",
+  statusPlaywrightSessionSoundcloudDisconnected: "Playwright SoundCloud session disconnected.",
+  statusPlaywrightSessionSpotifyDisconnected: "Playwright Spotify session disconnected.",
   statusPlaywrightSessionError: "Playwright session error",
   ytdlUtilityButton: "Download (yt-dl)",
   ytdlUtilityRunning: "Downloading (yt-dl)...",

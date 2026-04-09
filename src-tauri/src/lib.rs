@@ -55,6 +55,7 @@ struct MiscSettings {
     hypeddit_download_comment: String,
     hypeddit_download_name: String,
     hypeddit_download_email: String,
+    hypeddit_soundcloud_manual_cookies_json: String,
     hypeddit_download_start_timeout_seconds: i64,
 }
 
@@ -834,6 +835,8 @@ fn download_hypeddit_track_to_local_folder(
     let hypeddit_comment = db::get_hypeddit_download_comment(&state.db_path)?;
     let hypeddit_name = db::get_hypeddit_download_name(&state.db_path)?;
     let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
+    let hypeddit_soundcloud_manual_cookies_json =
+        db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?;
     let hypeddit_download_start_timeout_seconds =
         db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
     let hypeddit_click_delay_ms = db::get_hypeddit_click_delay_ms(&state.db_path)?;
@@ -845,6 +848,19 @@ fn download_hypeddit_track_to_local_folder(
         .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
     std::fs::create_dir_all(&browser_profile_dir)
         .map_err(|error| format!("Impossible de préparer le profil navigateur Hypeddit: {error}"))?;
+
+    let manual_soundcloud_cookies_path = browser_profile_dir.join("soundcloud-manual-cookies.json");
+    let manual_soundcloud_cookies_arg = if hypeddit_soundcloud_manual_cookies_json.trim().is_empty() {
+        let _ = std::fs::remove_file(&manual_soundcloud_cookies_path);
+        String::new()
+    } else {
+        std::fs::write(
+            &manual_soundcloud_cookies_path,
+            hypeddit_soundcloud_manual_cookies_json.as_bytes(),
+        )
+        .map_err(|error| format!("Impossible d'ecrire les cookies SoundCloud manuels: {error}"))?;
+        manual_soundcloud_cookies_path.to_string_lossy().to_string()
+    };
 
     let mut child = Command::new("node")
         .arg(script_path)
@@ -869,6 +885,7 @@ fn download_hypeddit_track_to_local_folder(
         .arg(browser_profile_dir.to_string_lossy().to_string())
         .arg(hypeddit_download_start_timeout_seconds.to_string())
         .arg(hypeddit_click_delay_ms.to_string())
+        .arg(manual_soundcloud_cookies_arg)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)
@@ -1522,6 +1539,7 @@ fn check_local_file_exists(file_path: String) -> Result<bool, String> {
 fn connect_playwright_profile_session(
     state: State<AppState>,
     provider: String,
+    reset_session: bool,
 ) -> Result<(), String> {
     let provider = provider.trim().to_lowercase();
     if provider != "soundcloud" && provider != "spotify" {
@@ -1553,6 +1571,7 @@ fn connect_playwright_profile_session(
         .arg(script_path)
         .arg(provider.as_str())
         .arg(browser_profile_dir.to_string_lossy().to_string())
+        .arg(if reset_session { "true" } else { "false" })
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)
@@ -1745,6 +1764,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
         hypeddit_download_name: db::get_hypeddit_download_name(&state.db_path)?,
         hypeddit_download_email: db::get_hypeddit_download_email(&state.db_path)?,
+        hypeddit_soundcloud_manual_cookies_json: db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?,
         hypeddit_download_start_timeout_seconds: db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?,
     })
 }
@@ -1800,6 +1820,11 @@ fn set_hypeddit_download_name(state: State<AppState>, name: String) -> Result<()
 #[tauri::command]
 fn set_hypeddit_download_email(state: State<AppState>, email: String) -> Result<(), String> {
     db::set_hypeddit_download_email(&state.db_path, email.as_str())
+}
+
+#[tauri::command]
+fn set_hypeddit_soundcloud_manual_cookies_json(state: State<AppState>, cookies_json: String) -> Result<(), String> {
+    db::set_hypeddit_soundcloud_manual_cookies_json(&state.db_path, cookies_json.as_str())
 }
 
 #[tauri::command]
@@ -1876,6 +1901,7 @@ pub fn run() {
             set_hypeddit_download_comment,
             set_hypeddit_download_name,
             set_hypeddit_download_email,
+            set_hypeddit_soundcloud_manual_cookies_json,
             set_hypeddit_download_start_timeout_seconds
         ])
         .run(tauri::generate_context!())

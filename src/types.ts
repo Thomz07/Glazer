@@ -112,6 +112,7 @@ export type MiscSettings = {
   hypeddit_download_comment?: string;
   hypeddit_download_name?: string;
   hypeddit_download_email?: string;
+  hypeddit_soundcloud_manual_cookies_json?: string;
   hypeddit_download_start_timeout_seconds?: number;
 };
 
