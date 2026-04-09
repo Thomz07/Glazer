@@ -42,6 +42,7 @@ import type {
   TrackSortOrder,
   TrackViewMode,
   View,
+  YtDlDownloadFileType,
 } from "./types";
 import "./App.css";
 
@@ -100,12 +101,14 @@ function App() {
     logs_enabled: true,
     hypeddit_click_delay_ms: 0,
     hypeddit_preload_app_sessions: true,
-    show_ytdl_utility_button: false,
+    show_ytdl_track_download_button: false,
+    show_ytdl_playlist_download_button: false,
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
   const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadConversionFormat, setHypedditDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
+  const [ytdlDownloadFileType, setYtDlDownloadFileType] = useState<YtDlDownloadFileType>("bestaudio");
   const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
   const [hypedditDownloadStartTimeoutSeconds, setHypedditDownloadStartTimeoutSeconds] = useState(30);
@@ -611,6 +614,7 @@ function App() {
       setDownloadEmbedCover(Boolean(settings.download_embed_cover));
       setDownloadRenameWithSoundcloudTitle(Boolean(settings.download_rename_with_soundcloud_title));
       setHypedditDownloadConversionFormat(settings.hypeddit_download_conversion_format ?? "original");
+      setYtDlDownloadFileType(settings.ytdl_download_file_type ?? "bestaudio");
       setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
       setHypedditDownloadStartTimeoutSeconds(
@@ -648,6 +652,16 @@ function App() {
     try {
       await invoke("set_hypeddit_download_conversion_format", { format });
       setHypedditDownloadConversionFormat(format);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveYtDlDownloadFileType(fileType: YtDlDownloadFileType) {
+    try {
+      await invoke("set_ytdl_download_file_type", { fileType });
+      setYtDlDownloadFileType(fileType);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -761,10 +775,19 @@ function App() {
     }
   }
 
-  async function saveShowYtDlUtilityButton(enabled: boolean) {
+  async function saveShowYtDlTrackDownloadButton(enabled: boolean) {
     try {
-      await invoke("set_show_ytdl_utility_button", { enabled });
-      setDebugSettings((current) => ({ ...current, show_ytdl_utility_button: enabled }));
+      await invoke("set_show_ytdl_track_download_button", { enabled });
+      setDebugSettings((current) => ({ ...current, show_ytdl_track_download_button: enabled }));
+    } catch (error) {
+      setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveShowYtDlPlaylistDownloadButton(enabled: boolean) {
+    try {
+      await invoke("set_show_ytdl_playlist_download_button", { enabled });
+      setDebugSettings((current) => ({ ...current, show_ytdl_playlist_download_button: enabled }));
     } catch (error) {
       setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
     }
@@ -1460,7 +1483,7 @@ function App() {
 
     try {
       setAsyncState("downloadingFromYtDl", true);
-      const result = await invoke<{ summary: string }>("download_playlist_with_ytdl", {
+      const result = await invoke<{ summary: string; file_path?: string | null; file_name?: string | null }>("download_playlist_with_ytdl", {
         playlistId: selectedPlaylistDetails.id,
         trackPermalinkUrl,
         trackTitle: selectedTrackInfo.title,
@@ -1470,22 +1493,53 @@ function App() {
         existingFilePath: selectedTrackInfo.local_file?.file_path ?? null,
       });
 
-      if (selectedPlaylistDetails) {
-        await invoke("scan_playlist_local_files", {
+      let localFileForUi: LocalAudioFileInfo | null = null;
+      try {
+        localFileForUi = await invoke<LocalAudioFileInfo | null>("get_playlist_track_local_file_info", {
           playlistId: selectedPlaylistDetails.id,
-          folderPath: outputFolder,
+          trackPermalinkUrl,
         });
+      } catch {
+      }
 
-        const details = await invoke<PlaylistDetails>("get_playlist_details", {
-          playlistId: selectedPlaylistDetails.id,
-        });
+      if (!localFileForUi && result.file_path && result.file_name) {
+        localFileForUi = {
+          file_path: result.file_path,
+          file_name: result.file_name,
+          matched_soundcloud_url: trackPermalinkUrl,
+          file_size_bytes: null,
+          modified_at: null,
+          local_cover_data_url: null,
+          local_title: null,
+          local_artist: null,
+          local_duration_seconds: null,
+          local_format: null,
+          local_bitrate_kbps: null,
+          local_max_frequency_hz: null,
+          local_quality_label: null,
+          local_sample_rate_hz: null,
+          local_channels: null,
+        };
+      }
 
-        setSelectedPlaylistDetailsWithCache(details);
-        setSelectedTrackId((currentId) => {
-          if (currentId === null) {
-            return null;
+      if (localFileForUi) {
+
+        updateSelectedPlaylistDetailsWithCache((current) => {
+          if (!current) {
+            return current;
           }
-          return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+
+          return {
+            ...current,
+            tracks: current.tracks.map((track) =>
+              track.id === selectedTrackInfo.id
+                ? {
+                    ...track,
+                    local_file: localFileForUi,
+                  }
+                : track,
+            ),
+          };
         });
       }
 
@@ -1569,11 +1623,6 @@ function App() {
           failedCount += 1;
         }
       }
-
-      await invoke("scan_playlist_local_files", {
-        playlistId: selectedPlaylistDetails.id,
-        folderPath: outputFolder,
-      });
 
       const details = await invoke<PlaylistDetails>("get_playlist_details", {
         playlistId: selectedPlaylistDetails.id,
@@ -2068,9 +2117,12 @@ function App() {
     getAssociatedSource(selectedTrackInfo?.associated_url) === "hypeddit" &&
     Boolean(selectedTrackInfo?.permalink_url);
   const canRunYtDlDownload =
-    debugSettings.show_ytdl_utility_button &&
+    debugSettings.show_ytdl_track_download_button &&
     hasAvailableLocalFolder &&
     Boolean(selectedTrackInfo?.permalink_url?.trim());
+  const canRunYtDlPlaylistDownload =
+    debugSettings.show_ytdl_playlist_download_button &&
+    hasAvailableLocalFolder;
   const availableMoveTargetPlaylists = selectedPlaylistDetails
     ? playlists.filter(
       (playlist) =>
@@ -2221,6 +2273,7 @@ function App() {
                 formatCount={formatCount}
                 formatEstimatedDuration={formatEstimatedDuration}
                 missingYtDlTracksCount={missingYtDlTracksCount}
+                canRunYtDlPlaylistDownload={canRunYtDlPlaylistDownload}
               />
 
               {selectedTrackInfo ? (
@@ -2375,6 +2428,7 @@ function App() {
             downloadEmbedCover={downloadEmbedCover}
             downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
             hypedditDownloadConversionFormat={hypedditDownloadConversionFormat}
+            ytdlDownloadFileType={ytdlDownloadFileType}
             hypedditDownloadStartTimeoutSeconds={hypedditDownloadStartTimeoutSeconds}
             hypedditDownloadHeadless={hypedditDownloadHeadless}
             hypedditDownloadComment={hypedditDownloadComment}
@@ -2416,6 +2470,11 @@ function App() {
             }}
             onSaveHypedditDownloadConversionFormat={(format) => {
               saveHypedditDownloadConversionFormat(format).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveYtDlDownloadFileType={(fileType) => {
+              saveYtDlDownloadFileType(fileType).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
@@ -2480,8 +2539,13 @@ function App() {
                 setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
               });
             }}
-            onSaveShowYtDlUtilityButton={(enabled) => {
-              saveShowYtDlUtilityButton(enabled).catch((error) => {
+            onSaveShowYtDlTrackDownloadButton={(enabled) => {
+              saveShowYtDlTrackDownloadButton(enabled).catch((error) => {
+                setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
+              });
+            }}
+            onSaveShowYtDlPlaylistDownloadButton={(enabled) => {
+              saveShowYtDlPlaylistDownloadButton(enabled).catch((error) => {
                 setStatus(`${t("statusDebugSaveError")}: ${String(error)}`);
               });
             }}

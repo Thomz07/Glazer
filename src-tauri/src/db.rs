@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection};
 
@@ -493,28 +493,87 @@ pub fn set_hypeddit_preload_app_sessions(db_path: &Path, enabled: bool) -> Resul
     Ok(())
 }
 
-pub fn get_show_ytdl_utility_button(db_path: &Path) -> Result<bool, String> {
+pub fn get_show_ytdl_track_download_button(db_path: &Path) -> Result<bool, String> {
     let connection = open_connection(db_path)?;
     let value = connection
         .query_row(
-            "SELECT value FROM app_settings WHERE key = 'show_ytdl_utility_button'",
+            "SELECT value FROM app_settings WHERE key = 'show_ytdl_track_download_button'",
             [],
             |row| row.get::<_, String>(0),
         )
         .ok();
 
-    Ok(value
+    let fallback_value = if value.is_none() {
+        connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'show_ytdl_utility_button'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+    } else {
+        None
+    };
+
+    let normalized_value = value.or(fallback_value);
+
+    Ok(normalized_value
         .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
         .unwrap_or(false))
 }
 
-pub fn set_show_ytdl_utility_button(db_path: &Path, enabled: bool) -> Result<(), String> {
+pub fn set_show_ytdl_track_download_button(db_path: &Path, enabled: bool) -> Result<(), String> {
     let connection = open_connection(db_path)?;
     connection
         .execute(
             "
             INSERT INTO app_settings (key, value)
-            VALUES ('show_ytdl_utility_button', ?1)
+            VALUES ('show_ytdl_track_download_button', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_show_ytdl_playlist_download_button(db_path: &Path) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'show_ytdl_playlist_download_button'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let fallback_value = if value.is_none() {
+        connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'show_ytdl_utility_button'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+    } else {
+        None
+    };
+
+    let normalized_value = value.or(fallback_value);
+
+    Ok(normalized_value
+        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
+        .unwrap_or(false))
+}
+
+pub fn set_show_ytdl_playlist_download_button(db_path: &Path, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('show_ytdl_playlist_download_button', ?1)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![if enabled { "true" } else { "false" }],
@@ -710,6 +769,60 @@ pub fn set_hypeddit_download_conversion_format(db_path: &Path, format: &str) -> 
             "
             INSERT INTO app_settings (key, value)
             VALUES ('hypeddit_download_conversion_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_ytdl_download_file_type(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'ytdl_download_file_type'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "bestaudio" | "original" => "bestaudio",
+                "mp3" => "mp3",
+                "m4a" => "m4a",
+                "wav" => "wav",
+                "flac" => "flac",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
+        .unwrap_or_else(|| "bestaudio".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_ytdl_download_file_type(db_path: &Path, file_type: &str) -> Result<(), String> {
+    let incoming = file_type.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "bestaudio" | "original" => "bestaudio",
+        "mp3" => "mp3",
+        "m4a" => "m4a",
+        "wav" => "wav",
+        "flac" => "flac",
+        _ => return Err("Type de fichier yt-dlp invalide.".to_string()),
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('ytdl_download_file_type', ?1)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![normalized],
@@ -1002,6 +1115,21 @@ pub fn replace_playlist_track_file_links(
     playlist_id: i64,
     files: &[ScannedAudioFile],
 ) -> Result<usize, String> {
+    fn normalize_file_path_key(file_path: &str) -> String {
+        let trimmed = file_path.trim();
+        let normalized = Path::new(trimmed)
+            .canonicalize()
+            .ok()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| trimmed.to_string());
+
+        if cfg!(target_os = "windows") {
+            normalized.to_ascii_lowercase()
+        } else {
+            normalized
+        }
+    }
+
     let connection = open_connection(db_path)?;
     let scanned_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1012,6 +1140,28 @@ pub fn replace_playlist_track_file_links(
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
 
+    let mut existing_links_statement = transaction
+        .prepare(
+            "
+            SELECT soundcloud_url, file_path
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    let existing_rows = existing_links_statement
+        .query_map(params![playlist_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut existing_links = Vec::new();
+    for row in existing_rows {
+        existing_links.push(row.map_err(|error| error.to_string())?);
+    }
+
+    drop(existing_links_statement);
+
     transaction
         .execute(
             "DELETE FROM playlist_track_file_links WHERE playlist_id = ?1",
@@ -1019,17 +1169,17 @@ pub fn replace_playlist_track_file_links(
         )
         .map_err(|error| error.to_string())?;
 
+    let mut scanned_files_by_path: HashMap<String, &ScannedAudioFile> = HashMap::new();
+    for file in files {
+        scanned_files_by_path
+            .entry(normalize_file_path_key(file.file_path.as_str()))
+            .or_insert(file);
+    }
+
     let mut inserted = 0usize;
     let mut seen_soundcloud_urls: HashSet<String> = HashSet::new();
-    for file in files {
-        let Some(soundcloud_url) = file.matched_soundcloud_url.as_deref() else {
-            continue;
-        };
 
-        if !seen_soundcloud_urls.insert(soundcloud_url.to_string()) {
-            continue;
-        }
-
+    let mut insert_link = |soundcloud_url: &str, file: &ScannedAudioFile| -> Result<(), String> {
         transaction
             .execute(
                 "
@@ -1081,6 +1231,40 @@ pub fn replace_playlist_track_file_links(
             .map_err(|error| error.to_string())?;
 
         inserted += 1;
+        Ok(())
+    };
+
+    for file in files {
+        let Some(soundcloud_url) = file.matched_soundcloud_url.as_deref() else {
+            continue;
+        };
+
+        if !seen_soundcloud_urls.insert(soundcloud_url.to_string()) {
+            continue;
+        }
+
+        insert_link(soundcloud_url, file)?;
+    }
+
+    // Keep prior manual associations when the file is still present after rescan,
+    // even if the file no longer exposes a readable SoundCloud URL tag.
+    for (existing_soundcloud_url, existing_file_path) in existing_links {
+        if !seen_soundcloud_urls.insert(existing_soundcloud_url.clone()) {
+            continue;
+        }
+
+        let path_key = normalize_file_path_key(existing_file_path.as_str());
+        let Some(file) = scanned_files_by_path.get(path_key.as_str()) else {
+            continue;
+        };
+
+        if let Some(scanned_soundcloud_url) = file.matched_soundcloud_url.as_deref() {
+            if scanned_soundcloud_url != existing_soundcloud_url {
+                continue;
+            }
+        }
+
+        insert_link(existing_soundcloud_url.as_str(), file)?;
     }
 
     transaction.commit().map_err(|error| error.to_string())?;

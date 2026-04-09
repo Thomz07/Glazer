@@ -7,6 +7,7 @@ import type {
   SoundCloudConfigStatus,
   SpectrogramAnalysisScope,
   ThemeMode,
+  YtDlDownloadFileType,
 } from "../types";
 
 type SettingsViewProps = {
@@ -21,6 +22,7 @@ type SettingsViewProps = {
   downloadEmbedCover: boolean;
   downloadRenameWithSoundcloudTitle: boolean;
   hypedditDownloadConversionFormat: HypedditConversionFormat;
+  ytdlDownloadFileType: YtDlDownloadFileType;
   hypedditDownloadStartTimeoutSeconds: number;
   hypedditDownloadHeadless: boolean;
   hypedditDownloadComment: string;
@@ -45,6 +47,7 @@ type SettingsViewProps = {
   onSaveDownloadEmbedCover: (enabled: boolean) => void;
   onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
+  onSaveYtDlDownloadFileType: (fileType: YtDlDownloadFileType) => void;
   setHypedditDownloadStartTimeoutSeconds: (value: number) => void;
   onSaveHypedditDownloadStartTimeoutSeconds: () => void;
   onSaveHypedditDownloadHeadless: (enabled: boolean) => void;
@@ -58,7 +61,8 @@ type SettingsViewProps = {
   onSaveLogsEnabled: (enabled: boolean) => void;
   onSaveHypedditClickDelayMs: (milliseconds: number) => void;
   onSaveHypedditPreloadAppSessions: (enabled: boolean) => void;
-  onSaveShowYtDlUtilityButton: (enabled: boolean) => void;
+  onSaveShowYtDlTrackDownloadButton: (enabled: boolean) => void;
+  onSaveShowYtDlPlaylistDownloadButton: (enabled: boolean) => void;
 };
 
 export function SettingsView({
@@ -73,6 +77,7 @@ export function SettingsView({
   downloadEmbedCover,
   downloadRenameWithSoundcloudTitle,
   hypedditDownloadConversionFormat,
+  ytdlDownloadFileType,
   hypedditDownloadStartTimeoutSeconds,
   hypedditDownloadHeadless,
   hypedditDownloadComment,
@@ -97,6 +102,7 @@ export function SettingsView({
   onSaveDownloadEmbedCover,
   onSaveDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadConversionFormat,
+  onSaveYtDlDownloadFileType,
   setHypedditDownloadStartTimeoutSeconds,
   onSaveHypedditDownloadStartTimeoutSeconds,
   onSaveHypedditDownloadHeadless,
@@ -110,7 +116,8 @@ export function SettingsView({
   onSaveLogsEnabled,
   onSaveHypedditClickDelayMs,
   onSaveHypedditPreloadAppSessions,
-  onSaveShowYtDlUtilityButton,
+  onSaveShowYtDlTrackDownloadButton,
+  onSaveShowYtDlPlaylistDownloadButton,
 }: SettingsViewProps) {
   const soundCloudConnectedAccountName = configStatus?.connected_account_name?.trim();
   const playwrightSoundcloudLabel = connectingPlaywrightSoundcloud
@@ -321,6 +328,43 @@ export function SettingsView({
           </label>
         </section>
 
+        <section className="settings-card">
+          <h3>{t("ytdlDownloadSettingsTitle")}</h3>
+          <p className="connection-hint">{t("ytdlDownloadQualityWarning")}</p>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={debugSettings.show_ytdl_track_download_button}
+              onChange={(event) => onSaveShowYtDlTrackDownloadButton(event.currentTarget.checked)}
+            />
+            <span>{t("ytdlEnableTrackDownloadButton")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={debugSettings.show_ytdl_playlist_download_button}
+              onChange={(event) => onSaveShowYtDlPlaylistDownloadButton(event.currentTarget.checked)}
+            />
+            <span>{t("ytdlEnablePlaylistDownloadButton")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("ytdlDownloadFileTypeLabel")}</span>
+            <select
+              value={ytdlDownloadFileType}
+              onChange={(event) => onSaveYtDlDownloadFileType(event.currentTarget.value as YtDlDownloadFileType)}
+            >
+              <option value="bestaudio">{t("ytdlDownloadFileTypeBestAudio")}</option>
+              <option value="mp3">{t("ytdlDownloadFileTypeMp3")}</option>
+              <option value="m4a">{t("ytdlDownloadFileTypeM4a")}</option>
+              <option value="wav">{t("ytdlDownloadFileTypeWav")}</option>
+              <option value="flac">{t("ytdlDownloadFileTypeFlac")}</option>
+            </select>
+          </label>
+        </section>
+
         <section className="settings-card settings-card-connections">
           <h3>{t("connectionsTitle")}</h3>
 
@@ -433,15 +477,6 @@ export function SettingsView({
               onChange={(event) => onSaveHypedditPreloadAppSessions(event.currentTarget.checked)}
             />
             <span>{t("debugHypedditPreloadAppSessions")}</span>
-          </label>
-
-          <label className="setting-toggle auth-actions">
-            <input
-              type="checkbox"
-              checked={debugSettings.show_ytdl_utility_button}
-              onChange={(event) => onSaveShowYtDlUtilityButton(event.currentTarget.checked)}
-            />
-            <span>{t("debugShowYtDlUtilityButton")}</span>
           </label>
 
           <label className="setting-toggle auth-actions">

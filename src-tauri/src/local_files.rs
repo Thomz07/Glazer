@@ -97,6 +97,34 @@ pub fn write_soundcloud_url_comment_tag(file_path: &str, track_permalink_url: &s
     let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
         .ok_or_else(|| "URL SoundCloud invalide pour le tag commentaire.".to_string())?;
 
+    write_id3_comment_tag(source, normalized_url.as_str())
+}
+
+pub fn write_soundcloud_url_and_probe_comment_tag(
+    file_path: &str,
+    track_permalink_url: &str,
+    probe_summary: &str,
+) -> Result<(), String> {
+    let source = Path::new(file_path);
+    if !source.exists() || !source.is_file() {
+        return Err(format!("Fichier audio introuvable: {file_path}"));
+    }
+
+    let normalized_url = normalize_soundcloud_url(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud invalide pour le tag commentaire.".to_string())?;
+
+    let trimmed_probe_summary = probe_summary.trim();
+    let comment_text = if trimmed_probe_summary.is_empty() {
+        normalized_url
+    } else {
+        format!("{normalized_url}\nffprobe: {trimmed_probe_summary}")
+    };
+
+    write_id3_comment_tag(source, comment_text.as_str())
+}
+
+fn write_id3_comment_tag(source: &Path, comment_text: &str) -> Result<(), String> {
+
     // Legacy compatibility target: the previous script reads COMM frames on MP3 files.
     let extension = source
         .extension()
@@ -113,7 +141,7 @@ pub fn write_soundcloud_url_comment_tag(file_path: &str, track_permalink_url: &s
     tag.add_frame(Comment {
         lang: "eng".to_string(),
         description: "Comment".to_string(),
-        text: normalized_url,
+        text: comment_text.to_string(),
     });
 
     tag.write_to_path(source, Version::Id3v23)
@@ -151,8 +179,17 @@ impl AudioConversionProfile {
         }
     }
 
-    fn ffmpeg_args(self) -> Vec<&'static str> {
+    fn ffmpeg_args(self, source_extension: &str) -> Vec<&'static str> {
+        let source_is_wav = source_extension.eq_ignore_ascii_case("wav");
         match self {
+            // WAV -> MP3 320: prefer LAME V0 quality-based encoding.
+            Self::Mp3("320k") if source_is_wav => {
+                vec!["-vn", "-codec:a", "libmp3lame", "-qscale:a", "0"]
+            }
+            // WAV -> AAC 256: use explicit AAC bitrate profile.
+            Self::Aac("256k") if source_is_wav => {
+                vec!["-vn", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"]
+            }
             Self::Mp3(bitrate) => vec!["-vn", "-map_metadata", "0", "-codec:a", "libmp3lame", "-b:a", bitrate],
             Self::Aac(bitrate) => vec!["-vn", "-map_metadata", "0", "-codec:a", "aac", "-b:a", bitrate, "-movflags", "+faststart"],
             Self::Wav => vec!["-vn", "-map_metadata", "0", "-codec:a", "pcm_s16le"],
@@ -228,7 +265,7 @@ pub fn convert_audio_file_with_ffmpeg(
         .arg("-i")
         .arg(source);
 
-    for arg in profile.ffmpeg_args() {
+    for arg in profile.ffmpeg_args(current_extension.as_str()) {
         command.arg(arg);
     }
 

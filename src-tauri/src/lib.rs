@@ -39,7 +39,8 @@ struct DebugSettings {
     logs_enabled: bool,
     hypeddit_click_delay_ms: i64,
     hypeddit_preload_app_sessions: bool,
-    show_ytdl_utility_button: bool,
+    show_ytdl_track_download_button: bool,
+    show_ytdl_playlist_download_button: bool,
 }
 
 #[derive(Serialize)]
@@ -48,6 +49,7 @@ struct MiscSettings {
     download_embed_cover: bool,
     download_rename_with_soundcloud_title: bool,
     hypeddit_download_conversion_format: String,
+    ytdl_download_file_type: String,
     analysis_auto_apply_frequency_max: bool,
     hypeddit_download_headless: bool,
     hypeddit_download_comment: String,
@@ -139,6 +141,8 @@ struct HypedditDownloadResult {
 #[derive(Serialize)]
 struct YtDlDownloadResult {
     summary: String,
+    file_path: Option<String>,
+    file_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1017,7 +1021,7 @@ fn download_playlist_with_ytdl(
         .ok_or_else(|| "URL SoundCloud de track invalide.".to_string())?;
 
     let scanned = local_files::scan_audio_files(output_folder)?;
-    let already_downloaded = scanned.into_iter().any(|item| {
+    let matched_existing_file = scanned.iter().find(|item| {
         item.matched_soundcloud_url
             .as_deref()
             .and_then(|value| local_files::normalize_soundcloud_url(Some(value)))
@@ -1025,10 +1029,26 @@ fn download_playlist_with_ytdl(
             .unwrap_or(false)
     });
 
-    if already_downloaded {
+    if let Some(existing_file) = matched_existing_file {
         if !overwrite_existing {
+            db::upsert_playlist_track_file_link_manual(
+                &state.db_path,
+                playlist_id,
+                track_permalink_url,
+                existing_file.file_path.as_str(),
+            )?;
+
+            let existing_file_name = Path::new(existing_file.file_path.as_str())
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(existing_file.file_name.as_str());
+
             return Ok(YtDlDownloadResult {
-                summary: "Track deja telechargee (dedupe)".to_string(),
+                summary: format!(
+                    "Track deja telechargee (dedupe + association): {existing_file_name}"
+                ),
+                file_path: Some(existing_file.file_path.clone()),
+                file_name: Some(existing_file_name.to_string()),
             });
         }
     }
@@ -1048,11 +1068,16 @@ fn download_playlist_with_ytdl(
     }
 
     let ytdlp_bin = resolve_ytdlp_binary()?;
+    let target_file_type = db::get_ytdl_download_file_type(&state.db_path)?;
+    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
+    let _ = inspect_ytdlp_formats(ytdlp_bin.as_str(), track_permalink_url);
     let mut downloaded_file_path = download_track_with_ytdlp(
         ytdlp_bin.as_str(),
         track_permalink_url,
         output_folder,
         overwrite_existing,
+        target_file_type.as_str(),
+        embed_cover,
     )?;
 
     let rename_with_soundcloud_title = db::get_download_rename_with_soundcloud_title(&state.db_path)?;
@@ -1090,12 +1115,7 @@ fn download_playlist_with_ytdl(
         }
     }
 
-    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
-    if embed_cover {
-        if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-            local_files::embed_cover_into_mp3(downloaded_file_path.as_str(), artwork_url)?;
-        }
-    }
+    let _ = artwork_url;
 
     db::upsert_playlist_track_file_link_manual(
         &state.db_path,
@@ -1104,19 +1124,46 @@ fn download_playlist_with_ytdl(
         downloaded_file_path.as_str(),
     )?;
 
-    let _ = local_files::write_soundcloud_url_comment_tag(
-        downloaded_file_path.as_str(),
-        normalized_track_url.as_str(),
-    );
+    let has_association = db::get_playlist_track_local_file_link_info(
+        &state.db_path,
+        playlist_id,
+        track_permalink_url,
+    )?
+    .is_some();
+    if !has_association {
+        return Err("Association locale impossible apres download yt-dlp.".to_string());
+    }
+
+    let ffprobe_summary = collect_ffprobe_summary(downloaded_file_path.as_str());
+    if let Some(summary) = ffprobe_summary.as_deref() {
+        let _ = local_files::write_soundcloud_url_and_probe_comment_tag(
+            downloaded_file_path.as_str(),
+            normalized_track_url.as_str(),
+            summary,
+        );
+    } else {
+        let _ = local_files::write_soundcloud_url_comment_tag(
+            downloaded_file_path.as_str(),
+            normalized_track_url.as_str(),
+        );
+    }
 
     let downloaded_file_name = Path::new(downloaded_file_path.as_str())
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(downloaded_file_path.as_str());
 
-    let summary = format!("Track telechargee: {downloaded_file_name}");
+    let summary = if let Some(probe) = ffprobe_summary {
+        format!("Track telechargee: {downloaded_file_name} ({probe})")
+    } else {
+        format!("Track telechargee: {downloaded_file_name}")
+    };
 
-    Ok(YtDlDownloadResult { summary })
+    Ok(YtDlDownloadResult {
+        summary,
+        file_path: Some(downloaded_file_path.clone()),
+        file_name: Some(downloaded_file_name.to_string()),
+    })
 }
 
 fn resolve_ytdlp_binary() -> Result<String, String> {
@@ -1135,41 +1182,155 @@ fn resolve_ytdlp_binary() -> Result<String, String> {
         .ok_or_else(|| "yt-dlp/yt-dl introuvable sur la machine.".to_string())
 }
 
+fn inspect_ytdlp_formats(ytdlp_bin: &str, track_url: &str) -> Result<(), String> {
+    for (label, args) in [
+        ("-F", vec!["--no-playlist", "-F", track_url]),
+        ("-J", vec!["--no-playlist", "-J", track_url]),
+    ] {
+        let output = Command::new(ytdlp_bin)
+            .args(args)
+            .output()
+            .map_err(|error| format!("Inspection yt-dlp {label} impossible: {error}"))?;
+
+        if !output.status.success() {
+            let stderr_text = String::from_utf8_lossy(&output.stderr);
+            let message = stderr_text
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("inspection en erreur")
+                .trim();
+            println!("[ytdlp] inspection {label} ignoree: {message}");
+            continue;
+        }
+
+        let stdout_text = String::from_utf8_lossy(&output.stdout);
+        let preview = stdout_text
+            .lines()
+            .take(24)
+            .collect::<Vec<_>>()
+            .join("\\n");
+        println!("[ytdlp] inspection {label}:\\n{preview}");
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum YtDlTargetFileType {
+    BestAudio,
+    Mp3,
+    M4a,
+    Wav,
+    Flac,
+}
+
+impl YtDlTargetFileType {
+    fn from_setting(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "mp3" => Self::Mp3,
+            "m4a" => Self::M4a,
+            "wav" => Self::Wav,
+            "flac" => Self::Flac,
+            _ => Self::BestAudio,
+        }
+    }
+
+    fn output_template(self) -> &'static str {
+        match self {
+            Self::BestAudio => "%(title)s.%(ext)s",
+            _ => "%(title)s.%(ext)s",
+        }
+    }
+
+    fn apply_audio_options(self, command: &mut Command) {
+        match self {
+            Self::BestAudio => {}
+            Self::Mp3 => {
+                command
+                    .arg("--extract-audio")
+                    .arg("--audio-format")
+                    .arg("mp3")
+                    .arg("--audio-quality")
+                    .arg("0");
+            }
+            Self::M4a => {
+                command
+                    .arg("--extract-audio")
+                    .arg("--audio-format")
+                    .arg("m4a");
+            }
+            Self::Wav => {
+                command
+                    .arg("--extract-audio")
+                    .arg("--audio-format")
+                    .arg("wav");
+            }
+            Self::Flac => {
+                command
+                    .arg("--extract-audio")
+                    .arg("--audio-format")
+                    .arg("flac");
+            }
+        }
+    }
+}
+
 fn download_track_with_ytdlp(
     ytdlp_bin: &str,
     track_url: &str,
     output_folder: &str,
     overwrite_existing: bool,
+    target_file_type: &str,
+    embed_cover: bool,
 ) -> Result<String, String> {
+    let target = YtDlTargetFileType::from_setting(target_file_type);
     let output_template = Path::new(output_folder)
-        .join("%(title)s.%(ext)s")
+        .join(target.output_template())
         .to_string_lossy()
         .to_string();
 
-    let mut command = Command::new(ytdlp_bin);
-    command
-        .arg("--no-playlist")
-        .arg("--extract-audio")
-        .arg("--audio-format")
-        .arg("mp3")
-        .arg("--audio-quality")
-        .arg("0")
-        .arg("--no-warnings")
-        .arg("--print")
-        .arg("after_move:filepath")
-        .arg("--output")
-        .arg(output_template);
+    let run_download = |enable_embed_cover: bool| -> Result<std::process::Output, String> {
+        let mut command = Command::new(ytdlp_bin);
+        command
+            .arg("--no-playlist")
+            .arg("-f")
+            .arg("bestaudio")
+            .arg("--no-warnings")
+            .arg("--print")
+            .arg("after_move:filepath")
+            .arg("--output")
+            .arg(output_template.as_str());
 
-    if overwrite_existing {
-        command.arg("--force-overwrites");
-    } else {
-        command.arg("--no-overwrites");
+        if enable_embed_cover {
+            // Let yt-dlp handle cover embedding directly in the target container.
+            command
+                .arg("--embed-thumbnail")
+                .arg("--convert-thumbnails")
+                .arg("jpg")
+                .arg("--add-metadata");
+        }
+
+        target.apply_audio_options(&mut command);
+
+        if overwrite_existing {
+            command.arg("--force-overwrites");
+        } else {
+            command.arg("--no-overwrites");
+        }
+
+        command
+            .arg(track_url)
+            .output()
+            .map_err(|error| format!("Impossible de lancer yt-dlp: {error}"))
+    };
+
+    let mut output = run_download(embed_cover)?;
+    if !output.status.success() && embed_cover {
+        // Some environments fail thumbnail embedding on specific containers (e.g. m4a).
+        // Retry the download without cover embedding instead of failing association.
+        output = run_download(false)?;
     }
-
-    let output = command
-        .arg(track_url)
-        .output()
-        .map_err(|error| format!("Impossible de lancer yt-dlp: {error}"))?;
 
     if !output.status.success() {
         let stderr_text = String::from_utf8_lossy(&output.stderr);
@@ -1191,6 +1352,96 @@ fn download_track_with_ytdlp(
         .to_string();
 
     Ok(downloaded_file)
+}
+
+fn resolve_ffprobe_binary() -> Option<&'static str> {
+    ["ffprobe", "avprobe"]
+        .iter()
+        .find_map(|candidate| {
+            Command::new(candidate)
+                .arg("-version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()
+                .filter(|status| status.success())
+                .map(|_| *candidate)
+        })
+}
+
+fn collect_ffprobe_summary(file_path: &str) -> Option<String> {
+    let ffprobe_bin = resolve_ffprobe_binary()?;
+
+    let output = Command::new(ffprobe_bin)
+        .arg("-v")
+        .arg("error")
+        .arg("-show_streams")
+        .arg("-show_format")
+        .arg("-of")
+        .arg("json")
+        .arg(file_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json_value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let audio_stream = json_value
+        .get("streams")?
+        .as_array()?
+        .iter()
+        .find(|stream| {
+            stream
+                .get("codec_type")
+                .and_then(|value| value.as_str())
+                .map(|value| value.eq_ignore_ascii_case("audio"))
+                .unwrap_or(false)
+        })?;
+
+    let codec = audio_stream
+        .get("codec_name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+    let sample_rate_hz = audio_stream
+        .get("sample_rate")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<i64>().ok());
+    let channels = audio_stream
+        .get("channels")
+        .and_then(|value| value.as_i64());
+    let bitrate_kbps = audio_stream
+        .get("bit_rate")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|value| value / 1000)
+        .or_else(|| {
+            json_value
+                .get("format")
+                .and_then(|value| value.get("bit_rate"))
+                .and_then(|value| value.as_str())
+                .and_then(|value| value.parse::<i64>().ok())
+                .map(|value| value / 1000)
+        });
+    let container = json_value
+        .get("format")
+        .and_then(|value| value.get("format_name"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+
+    let mut parts = vec![format!("codec={codec}"), format!("container={container}")];
+    if let Some(sample_rate_hz) = sample_rate_hz {
+        parts.push(format!("sample_rate={}Hz", sample_rate_hz));
+    }
+    if let Some(channels) = channels {
+        parts.push(format!("channels={channels}"));
+    }
+    if let Some(bitrate_kbps) = bitrate_kbps {
+        parts.push(format!("bitrate={}kbps", bitrate_kbps));
+    }
+
+    Some(parts.join(", "))
 }
 
 #[tauri::command]
@@ -1444,7 +1695,8 @@ fn get_debug_settings(state: State<AppState>) -> Result<DebugSettings, String> {
         logs_enabled: db::get_logs_enabled(&state.db_path)?,
         hypeddit_click_delay_ms: db::get_hypeddit_click_delay_ms(&state.db_path)?,
         hypeddit_preload_app_sessions: db::get_hypeddit_preload_app_sessions(&state.db_path)?,
-        show_ytdl_utility_button: db::get_show_ytdl_utility_button(&state.db_path)?,
+        show_ytdl_track_download_button: db::get_show_ytdl_track_download_button(&state.db_path)?,
+        show_ytdl_playlist_download_button: db::get_show_ytdl_playlist_download_button(&state.db_path)?,
     })
 }
 
@@ -1469,8 +1721,13 @@ fn set_hypeddit_preload_app_sessions(state: State<AppState>, enabled: bool) -> R
 }
 
 #[tauri::command]
-fn set_show_ytdl_utility_button(state: State<AppState>, enabled: bool) -> Result<(), String> {
-    db::set_show_ytdl_utility_button(&state.db_path, enabled)
+fn set_show_ytdl_track_download_button(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_show_ytdl_track_download_button(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_show_ytdl_playlist_download_button(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_show_ytdl_playlist_download_button(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -1482,6 +1739,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
             &state.db_path,
         )?,
         hypeddit_download_conversion_format: db::get_hypeddit_download_conversion_format(&state.db_path)?,
+        ytdl_download_file_type: db::get_ytdl_download_file_type(&state.db_path)?,
         analysis_auto_apply_frequency_max: db::get_analysis_auto_apply_frequency_max(&state.db_path)?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
@@ -1512,6 +1770,11 @@ fn set_download_rename_with_soundcloud_title(
 #[tauri::command]
 fn set_hypeddit_download_conversion_format(state: State<AppState>, format: String) -> Result<(), String> {
     db::set_hypeddit_download_conversion_format(&state.db_path, format.as_str())
+}
+
+#[tauri::command]
+fn set_ytdl_download_file_type(state: State<AppState>, file_type: String) -> Result<(), String> {
+    db::set_ytdl_download_file_type(&state.db_path, file_type.as_str())
 }
 
 #[tauri::command]
@@ -1600,12 +1863,14 @@ pub fn run() {
             set_logs_enabled,
             set_hypeddit_click_delay_ms,
             set_hypeddit_preload_app_sessions,
-            set_show_ytdl_utility_button,
+            set_show_ytdl_track_download_button,
+            set_show_ytdl_playlist_download_button,
             get_misc_settings,
             set_playlist_cover_mode,
             set_download_embed_cover,
             set_download_rename_with_soundcloud_title,
             set_hypeddit_download_conversion_format,
+            set_ytdl_download_file_type,
             set_analysis_auto_apply_frequency_max,
             set_hypeddit_download_headless,
             set_hypeddit_download_comment,

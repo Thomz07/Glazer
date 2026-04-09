@@ -60,6 +60,7 @@ type PlaylistDetailsProps = {
   formatCount: (value?: number | null) => string;
   formatEstimatedDuration: (seconds: number) => string;
   missingYtDlTracksCount: number;
+  canRunYtDlPlaylistDownload: boolean;
 };
 
 export function PlaylistDetailsView({
@@ -112,6 +113,7 @@ export function PlaylistDetailsView({
   formatCount,
   formatEstimatedDuration,
   missingYtDlTracksCount,
+  canRunYtDlPlaylistDownload,
 }: PlaylistDetailsProps) {
   return (
     <section className="tracks-column">
@@ -270,7 +272,7 @@ export function PlaylistDetailsView({
                   {runningGlobalAudioAnalysis ? t("globalAudioAnalysisRunning") : t("globalAudioAnalysisAction")}
                 </button>
               ) : null}
-              {hasAvailableLocalFolder && !confirmGlobalAudioAnalysis ? (
+              {hasAvailableLocalFolder && canRunYtDlPlaylistDownload && !confirmGlobalAudioAnalysis ? (
                 <button
                   type="button"
                   className="filter-reset"

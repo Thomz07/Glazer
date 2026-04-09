@@ -84,7 +84,8 @@ export type DebugSettings = {
   logs_enabled: boolean;
   hypeddit_click_delay_ms: number;
   hypeddit_preload_app_sessions: boolean;
-  show_ytdl_utility_button: boolean;
+  show_ytdl_track_download_button: boolean;
+  show_ytdl_playlist_download_button: boolean;
 };
 
 export type PlaylistCoverMode = "first" | "random";
@@ -98,11 +99,14 @@ export type HypedditConversionFormat =
   | "wav"
   | "flac";
 
+export type YtDlDownloadFileType = "bestaudio" | "mp3" | "m4a" | "wav" | "flac";
+
 export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
   download_embed_cover?: boolean;
   download_rename_with_soundcloud_title?: boolean;
   hypeddit_download_conversion_format?: HypedditConversionFormat;
+  ytdl_download_file_type?: YtDlDownloadFileType;
   analysis_auto_apply_frequency_max?: boolean;
   hypeddit_download_headless?: boolean;
   hypeddit_download_comment?: string;
