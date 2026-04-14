@@ -669,6 +669,19 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
     process.exit(2);
   }
 
+  if (!downloadStarted) {
+    await context.close();
+    process.stdout.write("__ERROR__:Le telechargement n'est pas demarre, fermeture navigateur annulee.\n");
+    process.exit(3);
+  }
+
+  const downloadFailure = await download.failure();
+  if (downloadFailure) {
+    await context.close();
+    process.stdout.write(`__ERROR__:Download Playwright en erreur: ${downloadFailure}\n`);
+    process.exit(4);
+  }
+
   for (const candidatePage of context.pages()) {
     try {
       if (!candidatePage.isClosed()) {
