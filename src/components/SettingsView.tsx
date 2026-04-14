@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import type { Language, TranslationKey } from "../i18n";
 import type {
   CoverQuality,
   DebugSettings,
   HypedditConversionFormat,
+  PlaylistDownloadPriorityOrder,
   PlaylistCoverMode,
   SoundCloudConfigStatus,
   SpectrogramAnalysisScope,
@@ -21,11 +23,16 @@ type SettingsViewProps = {
   analysisAutoApplyFrequencyMax: boolean;
   hypedditDownloadEmbedCover: boolean;
   hypedditDownloadRenameWithSoundcloudTitle: boolean;
+  soundcloudDownloadEmbedCover: boolean;
+  soundcloudDownloadRenameWithSoundcloudTitle: boolean;
   ytdlDownloadEmbedCover: boolean;
   ytdlDownloadRenameWithSoundcloudTitle: boolean;
   hypedditDownloadConversionFormat: HypedditConversionFormat;
+  soundcloudDownloadConversionFormat: HypedditConversionFormat;
   ytdlDownloadFileType: YtDlDownloadFileType;
+  playlistDownloadPriorityOrder: PlaylistDownloadPriorityOrder;
   hypedditDownloadStartTimeoutSeconds: number;
+  hypedditDownloadRetryCount: number;
   hypedditDownloadHeadless: boolean;
   hypedditDownloadComment: string;
   setHypedditDownloadComment: (value: string) => void;
@@ -50,12 +57,18 @@ type SettingsViewProps = {
   onSaveAnalysisAutoApplyFrequencyMax: (enabled: boolean) => void;
   onSaveHypedditDownloadEmbedCover: (enabled: boolean) => void;
   onSaveHypedditDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveSoundcloudDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveSoundcloudDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveYtDlDownloadEmbedCover: (enabled: boolean) => void;
   onSaveYtDlDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
+  onSaveSoundcloudDownloadConversionFormat: (format: HypedditConversionFormat) => void;
   onSaveYtDlDownloadFileType: (fileType: YtDlDownloadFileType) => void;
+  onSavePlaylistDownloadPriorityOrder: (order: PlaylistDownloadPriorityOrder) => void;
   setHypedditDownloadStartTimeoutSeconds: (value: number) => void;
   onSaveHypedditDownloadStartTimeoutSeconds: () => void;
+  setHypedditDownloadRetryCount: (value: number) => void;
+  onSaveHypedditDownloadRetryCount: () => void;
   onSaveHypedditDownloadHeadless: (enabled: boolean) => void;
   onSaveHypedditDownloadComment: () => void;
   onSaveHypedditDownloadName: () => void;
@@ -72,6 +85,47 @@ type SettingsViewProps = {
   onSaveShowYtDlPlaylistDownloadButton: (enabled: boolean) => void;
 };
 
+type PlaylistPrioritySource = "hypeddit" | "soundcloud" | "ytdl";
+
+function orderToSources(order: PlaylistDownloadPriorityOrder): PlaylistPrioritySource[] {
+  switch (order) {
+    case "hypeddit_soundcloud_ytdl":
+      return ["hypeddit", "soundcloud", "ytdl"];
+    case "hypeddit_ytdl_soundcloud":
+      return ["hypeddit", "ytdl", "soundcloud"];
+    case "soundcloud_hypeddit_ytdl":
+      return ["soundcloud", "hypeddit", "ytdl"];
+    case "soundcloud_ytdl_hypeddit":
+      return ["soundcloud", "ytdl", "hypeddit"];
+    case "ytdl_hypeddit_soundcloud":
+      return ["ytdl", "hypeddit", "soundcloud"];
+    case "ytdl_soundcloud_hypeddit":
+      return ["ytdl", "soundcloud", "hypeddit"];
+    default:
+      return ["hypeddit", "soundcloud", "ytdl"];
+  }
+}
+
+function sourcesToOrder(sources: PlaylistPrioritySource[]): PlaylistDownloadPriorityOrder {
+  const joined = sources.join("_");
+  switch (joined) {
+    case "hypeddit_soundcloud_ytdl":
+      return "hypeddit_soundcloud_ytdl";
+    case "hypeddit_ytdl_soundcloud":
+      return "hypeddit_ytdl_soundcloud";
+    case "soundcloud_hypeddit_ytdl":
+      return "soundcloud_hypeddit_ytdl";
+    case "soundcloud_ytdl_hypeddit":
+      return "soundcloud_ytdl_hypeddit";
+    case "ytdl_hypeddit_soundcloud":
+      return "ytdl_hypeddit_soundcloud";
+    case "ytdl_soundcloud_hypeddit":
+      return "ytdl_soundcloud_hypeddit";
+    default:
+      return "hypeddit_soundcloud_ytdl";
+  }
+}
+
 export function SettingsView({
   t,
   themeMode,
@@ -83,11 +137,16 @@ export function SettingsView({
   analysisAutoApplyFrequencyMax,
   hypedditDownloadEmbedCover,
   hypedditDownloadRenameWithSoundcloudTitle,
+  soundcloudDownloadEmbedCover,
+  soundcloudDownloadRenameWithSoundcloudTitle,
   ytdlDownloadEmbedCover,
   ytdlDownloadRenameWithSoundcloudTitle,
   hypedditDownloadConversionFormat,
+  soundcloudDownloadConversionFormat,
   ytdlDownloadFileType,
+  playlistDownloadPriorityOrder,
   hypedditDownloadStartTimeoutSeconds,
+  hypedditDownloadRetryCount,
   hypedditDownloadHeadless,
   hypedditDownloadComment,
   setHypedditDownloadComment,
@@ -112,12 +171,18 @@ export function SettingsView({
   onSaveAnalysisAutoApplyFrequencyMax,
   onSaveHypedditDownloadEmbedCover,
   onSaveHypedditDownloadRenameWithSoundcloudTitle,
+  onSaveSoundcloudDownloadEmbedCover,
+  onSaveSoundcloudDownloadRenameWithSoundcloudTitle,
   onSaveYtDlDownloadEmbedCover,
   onSaveYtDlDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadConversionFormat,
+  onSaveSoundcloudDownloadConversionFormat,
   onSaveYtDlDownloadFileType,
+  onSavePlaylistDownloadPriorityOrder,
   setHypedditDownloadStartTimeoutSeconds,
   onSaveHypedditDownloadStartTimeoutSeconds,
+  setHypedditDownloadRetryCount,
+  onSaveHypedditDownloadRetryCount,
   onSaveHypedditDownloadHeadless,
   onSaveHypedditDownloadComment,
   onSaveHypedditDownloadName,
@@ -133,6 +198,14 @@ export function SettingsView({
   onSaveShowYtDlTrackDownloadButton,
   onSaveShowYtDlPlaylistDownloadButton,
 }: SettingsViewProps) {
+  const [prioritySources, setPrioritySources] = useState<PlaylistPrioritySource[]>(
+    orderToSources(playlistDownloadPriorityOrder),
+  );
+
+  useEffect(() => {
+    setPrioritySources(orderToSources(playlistDownloadPriorityOrder));
+  }, [playlistDownloadPriorityOrder]);
+
   const soundCloudConnectedAccountName = configStatus?.connected_account_name?.trim();
   const playwrightSoundcloudLabel = connectingPlaywrightSoundcloud
     ? t("playwrightSessionConnecting")
@@ -144,6 +217,48 @@ export function SettingsView({
     : playwrightSpotifyConnected
       ? `${t("playwrightSessionConnectSpotify")} (${t("connected")})`
       : t("playwrightSessionConnectSpotify");
+
+  function getPrioritySourceLabel(source: PlaylistPrioritySource) {
+    switch (source) {
+      case "hypeddit":
+        return t("playlistPrioritySourceHypeddit") || "Hypeddit";
+      case "soundcloud":
+        return t("playlistPrioritySourceSoundcloud") || "SoundCloud direct";
+      case "ytdl":
+        return t("playlistPrioritySourceYtdl") || "yt-dlp";
+      default:
+        return source;
+    }
+  }
+
+  function movePrioritySource(dragged: PlaylistPrioritySource, target: PlaylistPrioritySource) {
+    if (dragged === target) {
+      return;
+    }
+
+    const next = [...prioritySources];
+    const draggedIndex = next.indexOf(dragged);
+    const targetIndex = next.indexOf(target);
+    if (draggedIndex < 0 || targetIndex < 0) {
+      return;
+    }
+
+    next.splice(draggedIndex, 1);
+    next.splice(targetIndex, 0, dragged);
+
+    setPrioritySources(next);
+    onSavePlaylistDownloadPriorityOrder(sourcesToOrder(next));
+  }
+
+  function movePrioritySourceByOffset(source: PlaylistPrioritySource, offset: -1 | 1) {
+    const currentIndex = prioritySources.indexOf(source);
+    const targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= prioritySources.length) {
+      return;
+    }
+
+    movePrioritySource(source, prioritySources[targetIndex]);
+  }
 
   return (
     <>
@@ -288,6 +403,32 @@ export function SettingsView({
           </label>
 
           <label className="setting-toggle auth-actions">
+            <span>{t("downloadRetryCountLabel")}</span>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              value={hypedditDownloadRetryCount}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.currentTarget.value, 10);
+                if (Number.isNaN(parsed)) {
+                  return;
+                }
+                setHypedditDownloadRetryCount(parsed);
+              }}
+              onBlur={onSaveHypedditDownloadRetryCount}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSaveHypedditDownloadRetryCount();
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+
+          <label className="setting-toggle auth-actions">
             <span>{t("downloadHypedditCommentLabel")}</span>
             <input
               type="text"
@@ -395,6 +536,83 @@ export function SettingsView({
               <option value="flac">{t("ytdlDownloadFileTypeFlac")}</option>
             </select>
           </label>
+        </section>
+
+        <section className="settings-card">
+          <h3>{t("soundcloudDownloadSettingsTitle")}</h3>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={soundcloudDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveSoundcloudDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={soundcloudDownloadEmbedCover}
+              onChange={(event) => onSaveSoundcloudDownloadEmbedCover(event.currentTarget.checked)}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadConversionFormatLabel")}</span>
+            <select
+              value={soundcloudDownloadConversionFormat}
+              onChange={(event) => onSaveSoundcloudDownloadConversionFormat(event.currentTarget.value as HypedditConversionFormat)}
+            >
+              <option value="original">{t("downloadConversionFormatOriginal")}</option>
+              <option value="mp3_320">{t("downloadConversionFormatMp3320")}</option>
+              <option value="mp3_256">{t("downloadConversionFormatMp3256")}</option>
+              <option value="mp3_192">{t("downloadConversionFormatMp3192")}</option>
+              <option value="aac_320">{t("downloadConversionFormatAac320")}</option>
+              <option value="aac_256">{t("downloadConversionFormatAac256")}</option>
+              <option value="wav">{t("downloadConversionFormatWav")}</option>
+              <option value="flac">{t("downloadConversionFormatFlac")}</option>
+            </select>
+          </label>
+        </section>
+
+        <section className="settings-card">
+          <h3>{t("playlistDownloadSettingsTitle")}</h3>
+          <p className="connection-hint">{t("playlistDownloadPriorityHint")}</p>
+
+          <p className="playlist-priority-label">{t("playlistDownloadPriorityLabel")}</p>
+          <ol className="playlist-priority-list auth-actions">
+            {prioritySources.map((source, index) => (
+              <li
+                key={source}
+                className="playlist-priority-item"
+              >
+                <span className="playlist-priority-rank">{index + 1}</span>
+                <span className="playlist-priority-source">{getPrioritySourceLabel(source)}</span>
+                <div className="playlist-priority-buttons">
+                  <button
+                    type="button"
+                    className="playlist-priority-btn"
+                    onClick={() => movePrioritySourceByOffset(source, -1)}
+                    disabled={index === 0}
+                    aria-label="Move source up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="playlist-priority-btn"
+                    onClick={() => movePrioritySourceByOffset(source, 1)}
+                    disabled={index === prioritySources.length - 1}
+                    aria-label="Move source down"
+                  >
+                    ↓
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
         </section>
 
         <section className="settings-card settings-card-connections">

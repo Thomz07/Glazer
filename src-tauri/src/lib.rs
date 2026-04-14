@@ -48,10 +48,14 @@ struct MiscSettings {
     playlist_cover_mode: String,
     hypeddit_download_embed_cover: bool,
     hypeddit_download_rename_with_soundcloud_title: bool,
+    soundcloud_download_embed_cover: bool,
+    soundcloud_download_rename_with_soundcloud_title: bool,
     ytdl_download_embed_cover: bool,
     ytdl_download_rename_with_soundcloud_title: bool,
     hypeddit_download_conversion_format: String,
+    soundcloud_download_conversion_format: String,
     ytdl_download_file_type: String,
+    playlist_download_priority_order: String,
     analysis_auto_apply_frequency_max: bool,
     hypeddit_download_headless: bool,
     hypeddit_download_comment: String,
@@ -59,6 +63,7 @@ struct MiscSettings {
     hypeddit_download_email: String,
     hypeddit_soundcloud_manual_cookies_json: String,
     hypeddit_download_start_timeout_seconds: i64,
+    hypeddit_download_retry_count: i64,
 }
 
 #[derive(Serialize, Clone)]
@@ -1270,6 +1275,7 @@ fn download_hypeddit_track_to_local_folder(
             db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?;
         let hypeddit_download_start_timeout_seconds =
             db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
+        let hypeddit_download_retry_count = db::get_hypeddit_download_retry_count(&state.db_path)?;
         let hypeddit_click_delay_ms = db::get_hypeddit_click_delay_ms(&state.db_path)?;
         let hypeddit_preload_app_sessions = db::get_hypeddit_preload_app_sessions(&state.db_path)?;
         let browser_profile_dir = state
@@ -1292,85 +1298,124 @@ fn download_hypeddit_track_to_local_folder(
             .map_err(|error| format!("Impossible d'ecrire les cookies SoundCloud manuels: {error}"))?;
             manual_soundcloud_cookies_path.to_string_lossy().to_string()
         };
+        let max_attempts = hypeddit_download_retry_count.max(1) as usize;
+        let folder_arg = folder.to_string_lossy().to_string();
+        let profile_dir_arg = browser_profile_dir.to_string_lossy().to_string();
+        let timeout_arg = hypeddit_download_start_timeout_seconds.to_string();
+        let click_delay_arg = hypeddit_click_delay_ms.to_string();
 
-        let mut child = Command::new("node")
-            .arg(script_path)
-            .arg(hypeddit_url_trimmed)
-            .arg(folder.to_string_lossy().to_string())
-            .arg(if overwrite_existing { "true" } else { "false" })
-            .arg(existing_file_path_trimmed.as_str())
-            .arg(if hypeddit_headless { "true" } else { "false" })
-            .arg(hypeddit_comment)
-            .arg(hypeddit_name)
-            .arg(hypeddit_email)
-            .arg(if hypeddit_preload_app_sessions {
-                "true"
-            } else {
-                "false"
-            })
-            .arg(if hypeddit_preload_app_sessions {
-                "true"
-            } else {
-                "false"
-            })
-            .arg(browser_profile_dir.to_string_lossy().to_string())
-            .arg(hypeddit_download_start_timeout_seconds.to_string())
-            .arg(hypeddit_click_delay_ms.to_string())
-            .arg(manual_soundcloud_cookies_arg)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .current_dir(project_root)
-            .spawn()
-            .map_err(|error| format!("Impossible de lancer le download Hypeddit: {error}"))?;
+        let mut last_error = String::new();
+        let mut script_result: Option<HypedditScriptResult> = None;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Impossible de lire la sortie du download Hypeddit".to_string())?;
-        let reader = BufReader::new(stdout);
+        for attempt_index in 0..max_attempts {
+            let mut child = Command::new("node")
+                .arg(script_path.as_os_str())
+                .arg(hypeddit_url_trimmed)
+                .arg(folder_arg.as_str())
+                .arg(if overwrite_existing { "true" } else { "false" })
+                .arg(existing_file_path_trimmed.as_str())
+                .arg(if hypeddit_headless { "true" } else { "false" })
+                .arg(hypeddit_comment.as_str())
+                .arg(hypeddit_name.as_str())
+                .arg(hypeddit_email.as_str())
+                .arg(if hypeddit_preload_app_sessions {
+                    "true"
+                } else {
+                    "false"
+                })
+                .arg(if hypeddit_preload_app_sessions {
+                    "true"
+                } else {
+                    "false"
+                })
+                .arg(profile_dir_arg.as_str())
+                .arg(timeout_arg.as_str())
+                .arg(click_delay_arg.as_str())
+                .arg(manual_soundcloud_cookies_arg.as_str())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .current_dir(project_root.as_path())
+                .spawn()
+                .map_err(|error| format!("Impossible de lancer le download Hypeddit: {error}"))?;
 
-        let mut result_payload: Option<String> = None;
-        let mut script_error: Option<String> = None;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "Impossible de lire la sortie du download Hypeddit".to_string())?;
+            let reader = BufReader::new(stdout);
 
-        for line in reader.lines() {
-            let line = line.map_err(|error| format!("Lecture download Hypeddit impossible: {error}"))?;
-            if let Some(value) = line.strip_prefix("__PROGRESS__:") {
-                let _ = app.emit(
-                    "hypeddit-download-progress",
-                    HypedditDownloadProgressPayload {
-                        phase: value.to_string(),
-                    },
-                );
+            let mut result_payload: Option<String> = None;
+            let mut script_error: Option<String> = None;
+
+            for line in reader.lines() {
+                let line = line.map_err(|error| format!("Lecture download Hypeddit impossible: {error}"))?;
+                if let Some(value) = line.strip_prefix("__PROGRESS__:") {
+                    let _ = app.emit(
+                        "hypeddit-download-progress",
+                        HypedditDownloadProgressPayload {
+                            phase: value.to_string(),
+                        },
+                    );
+                }
+                if let Some(value) = line.strip_prefix("__LOG__:") {
+                    println!("[hypeddit] {value}");
+                }
+                if let Some(value) = line.strip_prefix("__ERROR__:") {
+                    script_error = Some(value.to_string());
+                }
+                if let Some(value) = line.strip_prefix("__RESULT__:") {
+                    result_payload = Some(value.to_string());
+                }
             }
-            if let Some(value) = line.strip_prefix("__LOG__:") {
-                println!("[hypeddit] {value}");
+
+            let status = child
+                .wait()
+                .map_err(|error| format!("Attente download Hypeddit impossible: {error}"))?;
+
+            if !status.success() {
+                last_error = if let Some(script_error) = script_error {
+                    format!("Download Hypeddit en erreur: {script_error}")
+                } else {
+                    "Download Hypeddit en erreur".to_string()
+                };
+
+                if attempt_index + 1 < max_attempts {
+                    continue;
+                }
+
+                return Err(last_error);
             }
-            if let Some(value) = line.strip_prefix("__ERROR__:") {
-                script_error = Some(value.to_string());
-            }
-            if let Some(value) = line.strip_prefix("__RESULT__:") {
-                result_payload = Some(value.to_string());
+
+            let json_payload = result_payload.ok_or_else(|| "Download Hypeddit sans résultat".to_string())?;
+            match serde_json::from_str::<HypedditScriptResult>(json_payload.as_str()) {
+                Ok(value) => {
+                    script_result = Some(value);
+                    break;
+                }
+                Err(error) => {
+                    last_error = format!("Réponse download Hypeddit invalide: {error}");
+                    if attempt_index + 1 < max_attempts {
+                        continue;
+                    }
+                    return Err(last_error);
+                }
             }
         }
 
-        let status = child
-            .wait()
-            .map_err(|error| format!("Attente download Hypeddit impossible: {error}"))?;
-
-        if !status.success() {
-            if let Some(script_error) = script_error {
-                return Err(format!("Download Hypeddit en erreur: {script_error}"));
+        result = script_result.ok_or_else(|| {
+            if last_error.is_empty() {
+                "Download Hypeddit sans résultat".to_string()
+            } else {
+                last_error.clone()
             }
-            return Err("Download Hypeddit en erreur".to_string());
-        }
-
-        let json_payload = result_payload.ok_or_else(|| "Download Hypeddit sans résultat".to_string())?;
-        result = serde_json::from_str::<HypedditScriptResult>(json_payload.as_str())
-            .map_err(|error| format!("Réponse download Hypeddit invalide: {error}"))?;
+        })?;
     }
 
-    let rename_with_soundcloud_title =
-        db::get_hypeddit_download_rename_with_soundcloud_title(&state.db_path)?;
+    let rename_with_soundcloud_title = if use_hypeddit_workflow {
+        db::get_hypeddit_download_rename_with_soundcloud_title(&state.db_path)?
+    } else {
+        db::get_soundcloud_download_rename_with_soundcloud_title(&state.db_path)?
+    };
     if rename_with_soundcloud_title {
         let downloaded_path = PathBuf::from(result.file_path.as_str());
         let extension = downloaded_path
@@ -1410,7 +1455,11 @@ fn download_hypeddit_track_to_local_folder(
         }
     }
 
-    let conversion_format = db::get_hypeddit_download_conversion_format(&state.db_path)?;
+    let conversion_format = if use_hypeddit_workflow {
+        db::get_hypeddit_download_conversion_format(&state.db_path)?
+    } else {
+        db::get_soundcloud_download_conversion_format(&state.db_path)?
+    };
     if let Some((converted_path, converted_name)) = local_files::convert_audio_file_with_ffmpeg(
         result.file_path.as_str(),
         conversion_format.as_str(),
@@ -1420,7 +1469,11 @@ fn download_hypeddit_track_to_local_folder(
         result.file_name = converted_name;
     }
 
-    let embed_cover = db::get_hypeddit_download_embed_cover(&state.db_path)?;
+    let embed_cover = if use_hypeddit_workflow {
+        db::get_hypeddit_download_embed_cover(&state.db_path)?
+    } else {
+        db::get_soundcloud_download_embed_cover(&state.db_path)?
+    };
     if embed_cover {
         if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             local_files::embed_cover_into_mp3(result.file_path.as_str(), artwork_url)?;
@@ -2191,12 +2244,17 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         hypeddit_download_rename_with_soundcloud_title: db::get_hypeddit_download_rename_with_soundcloud_title(
             &state.db_path,
         )?,
+        soundcloud_download_embed_cover: db::get_soundcloud_download_embed_cover(&state.db_path)?,
+        soundcloud_download_rename_with_soundcloud_title:
+            db::get_soundcloud_download_rename_with_soundcloud_title(&state.db_path)?,
         ytdl_download_embed_cover: db::get_ytdl_download_embed_cover(&state.db_path)?,
         ytdl_download_rename_with_soundcloud_title: db::get_ytdl_download_rename_with_soundcloud_title(
             &state.db_path,
         )?,
         hypeddit_download_conversion_format: db::get_hypeddit_download_conversion_format(&state.db_path)?,
+        soundcloud_download_conversion_format: db::get_soundcloud_download_conversion_format(&state.db_path)?,
         ytdl_download_file_type: db::get_ytdl_download_file_type(&state.db_path)?,
+        playlist_download_priority_order: db::get_playlist_download_priority_order(&state.db_path)?,
         analysis_auto_apply_frequency_max: db::get_analysis_auto_apply_frequency_max(&state.db_path)?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
         hypeddit_download_comment: db::get_hypeddit_download_comment(&state.db_path)?,
@@ -2204,6 +2262,7 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         hypeddit_download_email: db::get_hypeddit_download_email(&state.db_path)?,
         hypeddit_soundcloud_manual_cookies_json: db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?,
         hypeddit_download_start_timeout_seconds: db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?,
+        hypeddit_download_retry_count: db::get_hypeddit_download_retry_count(&state.db_path)?,
     })
 }
 
@@ -2226,6 +2285,19 @@ fn set_hypeddit_download_rename_with_soundcloud_title(
 }
 
 #[tauri::command]
+fn set_soundcloud_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_soundcloud_download_embed_cover(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_soundcloud_download_rename_with_soundcloud_title(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_soundcloud_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
 fn set_ytdl_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
     db::set_ytdl_download_embed_cover(&state.db_path, enabled)
 }
@@ -2244,8 +2316,18 @@ fn set_hypeddit_download_conversion_format(state: State<AppState>, format: Strin
 }
 
 #[tauri::command]
+fn set_soundcloud_download_conversion_format(state: State<AppState>, format: String) -> Result<(), String> {
+    db::set_soundcloud_download_conversion_format(&state.db_path, format.as_str())
+}
+
+#[tauri::command]
 fn set_ytdl_download_file_type(state: State<AppState>, file_type: String) -> Result<(), String> {
     db::set_ytdl_download_file_type(&state.db_path, file_type.as_str())
+}
+
+#[tauri::command]
+fn set_playlist_download_priority_order(state: State<AppState>, order: String) -> Result<(), String> {
+    db::set_playlist_download_priority_order(&state.db_path, order.as_str())
 }
 
 #[tauri::command]
@@ -2281,6 +2363,11 @@ fn set_hypeddit_soundcloud_manual_cookies_json(state: State<AppState>, cookies_j
 #[tauri::command]
 fn set_hypeddit_download_start_timeout_seconds(state: State<AppState>, seconds: i64) -> Result<(), String> {
     db::set_hypeddit_download_start_timeout_seconds(&state.db_path, seconds)
+}
+
+#[tauri::command]
+fn set_hypeddit_download_retry_count(state: State<AppState>, retry_count: i64) -> Result<(), String> {
+    db::set_hypeddit_download_retry_count(&state.db_path, retry_count)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2347,17 +2434,22 @@ pub fn run() {
             set_playlist_cover_mode,
             set_hypeddit_download_embed_cover,
             set_hypeddit_download_rename_with_soundcloud_title,
+            set_soundcloud_download_embed_cover,
+            set_soundcloud_download_rename_with_soundcloud_title,
             set_ytdl_download_embed_cover,
             set_ytdl_download_rename_with_soundcloud_title,
             set_hypeddit_download_conversion_format,
+            set_soundcloud_download_conversion_format,
             set_ytdl_download_file_type,
+            set_playlist_download_priority_order,
             set_analysis_auto_apply_frequency_max,
             set_hypeddit_download_headless,
             set_hypeddit_download_comment,
             set_hypeddit_download_name,
             set_hypeddit_download_email,
             set_hypeddit_soundcloud_manual_cookies_json,
-            set_hypeddit_download_start_timeout_seconds
+            set_hypeddit_download_start_timeout_seconds,
+            set_hypeddit_download_retry_count
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

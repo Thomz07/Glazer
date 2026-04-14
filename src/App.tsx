@@ -30,6 +30,7 @@ import type {
   MiscSettings,
   MovePlaylistTrackResult,
   Playlist,
+  PlaylistDownloadPriorityOrder,
   PlaylistCoverMode,
   PlaylistDetails,
   PlaylistGlobalAudioAnalysisResult,
@@ -110,13 +111,19 @@ function App() {
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
   const [hypedditDownloadEmbedCover, setHypedditDownloadEmbedCover] = useState(false);
   const [hypedditDownloadRenameWithSoundcloudTitle, setHypedditDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [soundcloudDownloadEmbedCover, setSoundcloudDownloadEmbedCover] = useState(false);
+  const [soundcloudDownloadRenameWithSoundcloudTitle, setSoundcloudDownloadRenameWithSoundcloudTitle] = useState(false);
   const [ytdlDownloadEmbedCover, setYtDlDownloadEmbedCover] = useState(false);
   const [ytdlDownloadRenameWithSoundcloudTitle, setYtDlDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadConversionFormat, setHypedditDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
+  const [soundcloudDownloadConversionFormat, setSoundcloudDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
   const [ytdlDownloadFileType, setYtDlDownloadFileType] = useState<YtDlDownloadFileType>("bestaudio");
+  const [playlistDownloadPriorityOrder, setPlaylistDownloadPriorityOrder] =
+    useState<PlaylistDownloadPriorityOrder>("hypeddit_soundcloud_ytdl");
   const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
   const [hypedditDownloadHeadless, setHypedditDownloadHeadless] = useState(true);
   const [hypedditDownloadStartTimeoutSeconds, setHypedditDownloadStartTimeoutSeconds] = useState(30);
+  const [hypedditDownloadRetryCount, setHypedditDownloadRetryCount] = useState(3);
   const [hypedditDownloadComment, setHypedditDownloadComment] = useState("Nice tune!");
   const [hypedditDownloadName, setHypedditDownloadName] = useState("Jojo");
   const [hypedditDownloadEmail, setHypedditDownloadEmail] = useState("jouch@hippo.com");
@@ -619,14 +626,21 @@ function App() {
       setPlaylistCoverMode(settings.playlist_cover_mode ?? "first");
       setHypedditDownloadEmbedCover(Boolean(settings.hypeddit_download_embed_cover));
       setHypedditDownloadRenameWithSoundcloudTitle(Boolean(settings.hypeddit_download_rename_with_soundcloud_title));
+      setSoundcloudDownloadEmbedCover(Boolean(settings.soundcloud_download_embed_cover));
+      setSoundcloudDownloadRenameWithSoundcloudTitle(Boolean(settings.soundcloud_download_rename_with_soundcloud_title));
       setYtDlDownloadEmbedCover(Boolean(settings.ytdl_download_embed_cover));
       setYtDlDownloadRenameWithSoundcloudTitle(Boolean(settings.ytdl_download_rename_with_soundcloud_title));
       setHypedditDownloadConversionFormat(settings.hypeddit_download_conversion_format ?? "original");
+      setSoundcloudDownloadConversionFormat(settings.soundcloud_download_conversion_format ?? "original");
       setYtDlDownloadFileType(settings.ytdl_download_file_type ?? "bestaudio");
+      setPlaylistDownloadPriorityOrder(settings.playlist_download_priority_order ?? "hypeddit_soundcloud_ytdl");
       setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
       setHypedditDownloadStartTimeoutSeconds(
         Math.min(300, Math.max(5, Math.round(settings.hypeddit_download_start_timeout_seconds ?? 30))),
+      );
+      setHypedditDownloadRetryCount(
+        Math.min(10, Math.max(1, Math.round(settings.hypeddit_download_retry_count ?? 3))),
       );
       setHypedditDownloadComment(settings.hypeddit_download_comment?.trim() || "Nice tune!");
       setHypedditDownloadName(settings.hypeddit_download_name?.trim() || "Jojo");
@@ -677,6 +691,26 @@ function App() {
     }
   }
 
+  async function saveSoundcloudDownloadEmbedCover(enabled: boolean) {
+    try {
+      await invoke("set_soundcloud_download_embed_cover", { enabled });
+      setSoundcloudDownloadEmbedCover(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveSoundcloudDownloadRenameWithSoundcloudTitle(enabled: boolean) {
+    try {
+      await invoke("set_soundcloud_download_rename_with_soundcloud_title", { enabled });
+      setSoundcloudDownloadRenameWithSoundcloudTitle(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
   async function saveHypedditDownloadConversionFormat(format: HypedditConversionFormat) {
     try {
       await invoke("set_hypeddit_download_conversion_format", { format });
@@ -691,6 +725,26 @@ function App() {
     try {
       await invoke("set_ytdl_download_file_type", { fileType });
       setYtDlDownloadFileType(fileType);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveSoundcloudDownloadConversionFormat(format: HypedditConversionFormat) {
+    try {
+      await invoke("set_soundcloud_download_conversion_format", { format });
+      setSoundcloudDownloadConversionFormat(format);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function savePlaylistDownloadPriorityOrder(order: PlaylistDownloadPriorityOrder) {
+    try {
+      await invoke("set_playlist_download_priority_order", { order });
+      setPlaylistDownloadPriorityOrder(order);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -725,6 +779,20 @@ function App() {
     try {
       await invoke("set_hypeddit_download_start_timeout_seconds", { seconds: normalized });
       setHypedditDownloadStartTimeoutSeconds(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveHypedditDownloadRetryCount(retryCount: number) {
+    const normalized = Number.isFinite(retryCount)
+      ? Math.min(10, Math.max(1, Math.round(retryCount)))
+      : 3;
+
+    try {
+      await invoke("set_hypeddit_download_retry_count", { retryCount: normalized });
+      setHypedditDownloadRetryCount(normalized);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -1186,8 +1254,9 @@ function App() {
         return;
       }
 
-      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+      const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
         playlistId: selectedPlaylistDetails.id,
+        headless: debugSettings.soundcloud_fallback_headless,
       });
       setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackId((currentId) => {
@@ -1225,8 +1294,9 @@ function App() {
         },
       );
 
-      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+      const details = await invoke<PlaylistDetails>("get_playlist_details_with_fallback", {
         playlistId: selectedPlaylistDetails.id,
+        headless: debugSettings.soundcloud_fallback_headless,
       });
       setSelectedPlaylistDetailsWithCache(details);
       setSelectedTrackId((currentId) => {
@@ -1720,6 +1790,80 @@ function App() {
     return selectedPlaylistDetails.tracks.filter((track) => !track.local_file && Boolean(track.permalink_url?.trim()));
   }
 
+  function getPlaylistDownloadPrioritySources(order: PlaylistDownloadPriorityOrder) {
+    switch (order) {
+      case "hypeddit_soundcloud_ytdl":
+        return ["hypeddit", "soundcloud", "ytdl"] as const;
+      case "hypeddit_ytdl_soundcloud":
+        return ["hypeddit", "ytdl", "soundcloud"] as const;
+      case "soundcloud_hypeddit_ytdl":
+        return ["soundcloud", "hypeddit", "ytdl"] as const;
+      case "soundcloud_ytdl_hypeddit":
+        return ["soundcloud", "ytdl", "hypeddit"] as const;
+      case "ytdl_hypeddit_soundcloud":
+        return ["ytdl", "hypeddit", "soundcloud"] as const;
+      case "ytdl_soundcloud_hypeddit":
+        return ["ytdl", "soundcloud", "hypeddit"] as const;
+      default:
+        return ["hypeddit", "soundcloud", "ytdl"] as const;
+    }
+  }
+
+  async function downloadMissingTrackBySource(
+    playlistId: number,
+    track: PlaylistTrack,
+    trackPermalinkUrl: string,
+    outputFolder: string,
+    source: "hypeddit" | "soundcloud" | "ytdl",
+  ) {
+    if (source === "hypeddit") {
+      const associatedUrl = track.associated_url?.trim();
+      if (!associatedUrl || getAssociatedSource(associatedUrl) !== "hypeddit") {
+        return false;
+      }
+
+      await invoke<HypedditDownloadResult>("download_hypeddit_track_to_local_folder", {
+        playlistId,
+        trackPermalinkUrl,
+        trackTitle: track.title,
+        hypedditUrl: associatedUrl,
+        artworkUrl: resolvePanelArtworkUrl(track.artwork_url) ?? track.artwork_url ?? null,
+        overwriteExisting: overwriteExistingPlaylistYtDlDownload,
+        existingFilePath: track.local_file?.file_path ?? null,
+      });
+      return true;
+    }
+
+    if (source === "soundcloud") {
+      if (track.soundcloud_downloadable === false) {
+        return false;
+      }
+
+      await invoke<HypedditDownloadResult>("download_hypeddit_track_to_local_folder", {
+        playlistId,
+        trackPermalinkUrl,
+        trackTitle: track.title,
+        hypedditUrl: trackPermalinkUrl,
+        artworkUrl: resolvePanelArtworkUrl(track.artwork_url) ?? track.artwork_url ?? null,
+        overwriteExisting: overwriteExistingPlaylistYtDlDownload,
+        existingFilePath: track.local_file?.file_path ?? null,
+      });
+      return true;
+    }
+
+    await invoke<{ summary: string }>("download_playlist_with_ytdl", {
+      playlistId,
+      trackPermalinkUrl,
+      trackTitle: track.title,
+      artworkUrl: resolvePanelArtworkUrl(track.artwork_url) ?? track.artwork_url ?? null,
+      outputFolder,
+      overwriteExisting: overwriteExistingPlaylistYtDlDownload,
+      existingFilePath: track.local_file?.file_path ?? null,
+    });
+
+    return true;
+  }
+
   function openYtDlPlaylistModalFromActions() {
     if (!hasAvailableLocalFolder) {
       setStatus(t("ytdlUtilityMissingFolder"));
@@ -1753,7 +1897,11 @@ function App() {
     }
 
     let successCount = 0;
+    let hypedditSuccessCount = 0;
+    let soundcloudSuccessCount = 0;
+    let ytdlSuccessCount = 0;
     let failedCount = 0;
+    const prioritySources = getPlaylistDownloadPrioritySources(playlistDownloadPriorityOrder);
 
     try {
       setAsyncState("downloadingPlaylistFromYtDl", true);
@@ -1768,18 +1916,37 @@ function App() {
 
         setYtDlPlaylistProgressLabel(`${index + 1}/${missingTracks.length} • ${track.title}`);
 
-        try {
-          await invoke<{ summary: string }>("download_playlist_with_ytdl", {
-            playlistId: selectedPlaylistDetails.id,
-            trackPermalinkUrl,
-            trackTitle: track.title,
-            artworkUrl: resolvePanelArtworkUrl(track.artwork_url) ?? track.artwork_url ?? null,
-            outputFolder,
-            overwriteExisting: overwriteExistingPlaylistYtDlDownload,
-            existingFilePath: track.local_file?.file_path ?? null,
-          });
-          successCount += 1;
-        } catch {
+        let downloaded = false;
+        for (const source of prioritySources) {
+          try {
+            const sourceDownloaded = await downloadMissingTrackBySource(
+              selectedPlaylistDetails.id,
+              track,
+              trackPermalinkUrl,
+              outputFolder,
+              source,
+            );
+
+            if (!sourceDownloaded) {
+              continue;
+            }
+
+            successCount += 1;
+            if (source === "hypeddit") {
+              hypedditSuccessCount += 1;
+            } else if (source === "soundcloud") {
+              soundcloudSuccessCount += 1;
+            } else {
+              ytdlSuccessCount += 1;
+            }
+            downloaded = true;
+            break;
+          } catch {
+            // Try next source according to configured priority.
+          }
+        }
+
+        if (!downloaded) {
           failedCount += 1;
         }
       }
@@ -1795,7 +1962,9 @@ function App() {
         return details.tracks.some((track) => track.id === currentId) ? currentId : null;
       });
 
-      setStatus(`${t("ytdlPlaylistDone")}: ${successCount}/${missingTracks.length} • ${failedCount} ${t("globalAudioAnalysisFailed")}`);
+      setStatus(
+        `${t("ytdlPlaylistDone")}: ${successCount}/${missingTracks.length} • hypeddit ${hypedditSuccessCount} • soundcloud ${soundcloudSuccessCount} • yt-dl ${ytdlSuccessCount} • ${failedCount} ${t("globalAudioAnalysisFailed")}`,
+      );
       setShowYtDlPlaylistModal(false);
       setOverwriteExistingPlaylistYtDlDownload(false);
     } catch (error) {
@@ -2627,11 +2796,16 @@ function App() {
             analysisAutoApplyFrequencyMax={analysisAutoApplyFrequencyMax}
             hypedditDownloadEmbedCover={hypedditDownloadEmbedCover}
             hypedditDownloadRenameWithSoundcloudTitle={hypedditDownloadRenameWithSoundcloudTitle}
+            soundcloudDownloadEmbedCover={soundcloudDownloadEmbedCover}
+            soundcloudDownloadRenameWithSoundcloudTitle={soundcloudDownloadRenameWithSoundcloudTitle}
             ytdlDownloadEmbedCover={ytdlDownloadEmbedCover}
             ytdlDownloadRenameWithSoundcloudTitle={ytdlDownloadRenameWithSoundcloudTitle}
             hypedditDownloadConversionFormat={hypedditDownloadConversionFormat}
+            soundcloudDownloadConversionFormat={soundcloudDownloadConversionFormat}
             ytdlDownloadFileType={ytdlDownloadFileType}
+            playlistDownloadPriorityOrder={playlistDownloadPriorityOrder}
             hypedditDownloadStartTimeoutSeconds={hypedditDownloadStartTimeoutSeconds}
+            hypedditDownloadRetryCount={hypedditDownloadRetryCount}
             hypedditDownloadHeadless={hypedditDownloadHeadless}
             hypedditDownloadComment={hypedditDownloadComment}
             setHypedditDownloadComment={setHypedditDownloadComment}
@@ -2672,6 +2846,16 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            onSaveSoundcloudDownloadEmbedCover={(enabled) => {
+              saveSoundcloudDownloadEmbedCover(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveSoundcloudDownloadRenameWithSoundcloudTitle={(enabled) => {
+              saveSoundcloudDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveYtDlDownloadEmbedCover={(enabled) => {
               saveYtDlDownloadEmbedCover(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -2687,14 +2871,30 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            onSaveSoundcloudDownloadConversionFormat={(format) => {
+              saveSoundcloudDownloadConversionFormat(format).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveYtDlDownloadFileType={(fileType) => {
               saveYtDlDownloadFileType(fileType).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSavePlaylistDownloadPriorityOrder={(order) => {
+              savePlaylistDownloadPriorityOrder(order).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
             setHypedditDownloadStartTimeoutSeconds={setHypedditDownloadStartTimeoutSeconds}
             onSaveHypedditDownloadStartTimeoutSeconds={() => {
               saveHypedditDownloadStartTimeoutSeconds(hypedditDownloadStartTimeoutSeconds).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            setHypedditDownloadRetryCount={setHypedditDownloadRetryCount}
+            onSaveHypedditDownloadRetryCount={() => {
+              saveHypedditDownloadRetryCount(hypedditDownloadRetryCount).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}

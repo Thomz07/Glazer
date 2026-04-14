@@ -516,9 +516,18 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
   await page.goto(hypedditUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
 
-  await page.locator("#downloadProcess").first().waitFor({ state: "visible", timeout: 30000 });
+  const firstDownloadButton = page.locator("#downloadProcess").first();
+  try {
+    await firstDownloadButton.waitFor({ state: "visible", timeout: 8000 });
+  } catch {
+    const currentUrl = page.url();
+    throw new Error(
+      `Premier bouton download introuvable (page post-download probable). URL actuelle: ${currentUrl}`,
+    );
+  }
+
   await applyGateDelay(page);
-  await page.locator("#downloadProcess").first().click();
+  await firstDownloadButton.click();
   await page.waitForTimeout(500);
   await page.locator("#all_steps").first().waitFor({ state: "attached", timeout: 30000 });
 

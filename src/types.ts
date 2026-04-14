@@ -103,15 +103,26 @@ export type HypedditConversionFormat =
   | "flac";
 
 export type YtDlDownloadFileType = "bestaudio" | "mp3" | "m4a" | "wav" | "flac";
+export type PlaylistDownloadPriorityOrder =
+  | "hypeddit_soundcloud_ytdl"
+  | "hypeddit_ytdl_soundcloud"
+  | "soundcloud_hypeddit_ytdl"
+  | "soundcloud_ytdl_hypeddit"
+  | "ytdl_hypeddit_soundcloud"
+  | "ytdl_soundcloud_hypeddit";
 
 export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
   hypeddit_download_embed_cover?: boolean;
   hypeddit_download_rename_with_soundcloud_title?: boolean;
+  soundcloud_download_embed_cover?: boolean;
+  soundcloud_download_rename_with_soundcloud_title?: boolean;
   ytdl_download_embed_cover?: boolean;
   ytdl_download_rename_with_soundcloud_title?: boolean;
   hypeddit_download_conversion_format?: HypedditConversionFormat;
+  soundcloud_download_conversion_format?: HypedditConversionFormat;
   ytdl_download_file_type?: YtDlDownloadFileType;
+  playlist_download_priority_order?: PlaylistDownloadPriorityOrder;
   analysis_auto_apply_frequency_max?: boolean;
   hypeddit_download_headless?: boolean;
   hypeddit_download_comment?: string;
@@ -119,6 +130,7 @@ export type MiscSettings = {
   hypeddit_download_email?: string;
   hypeddit_soundcloud_manual_cookies_json?: string;
   hypeddit_download_start_timeout_seconds?: number;
+  hypeddit_download_retry_count?: number;
 };
 
 export type PlaylistLocalFolderAssociation = {

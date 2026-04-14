@@ -592,6 +592,70 @@ a {
   height: 18px;
 }
 
+.playlist-priority-label {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.playlist-priority-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.playlist-priority-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface-bg);
+  color: inherit;
+  user-select: none;
+}
+
+.playlist-priority-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  background: #e8edf9;
+  color: #1f3b70;
+  flex-shrink: 0;
+}
+
+.playlist-priority-source {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  font-weight: 600;
+}
+
+.playlist-priority-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.playlist-priority-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 @media (max-width: 640px) {
   .connect-btn {
     width: 100%;

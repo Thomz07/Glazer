@@ -721,6 +721,41 @@ pub fn set_hypeddit_download_rename_with_soundcloud_title(db_path: &Path, enable
     set_bool_setting(db_path, "hypeddit_download_rename_with_soundcloud_title", enabled)
 }
 
+pub fn get_soundcloud_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &[
+            "soundcloud_download_embed_cover",
+            "hypeddit_download_embed_cover",
+            "download_embed_cover",
+        ],
+        false,
+    )
+}
+
+pub fn set_soundcloud_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "soundcloud_download_embed_cover", enabled)
+}
+
+pub fn get_soundcloud_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &[
+            "soundcloud_download_rename_with_soundcloud_title",
+            "hypeddit_download_rename_with_soundcloud_title",
+            "download_rename_with_soundcloud_title",
+        ],
+        false,
+    )
+}
+
+pub fn set_soundcloud_download_rename_with_soundcloud_title(
+    db_path: &Path,
+    enabled: bool,
+) -> Result<(), String> {
+    set_bool_setting(db_path, "soundcloud_download_rename_with_soundcloud_title", enabled)
+}
+
 pub fn get_ytdl_download_embed_cover(db_path: &Path) -> Result<bool, String> {
     get_bool_setting_by_keys(
         db_path,
@@ -817,6 +852,131 @@ pub fn set_hypeddit_download_conversion_format(db_path: &Path, format: &str) -> 
             "
             INSERT INTO app_settings (key, value)
             VALUES ('hypeddit_download_conversion_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_soundcloud_download_conversion_format(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'soundcloud_download_conversion_format'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key = 'hypeddit_download_conversion_format'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "original" => "original",
+                "mp3" | "mp3_320" => "mp3_320",
+                "mp3_256" => "mp3_256",
+                "mp3_192" => "mp3_192",
+                "aac_320" => "aac_320",
+                "aac_256" => "aac_256",
+                "wav" => "wav",
+                "flac" => "flac",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
+        .unwrap_or_else(|| "original".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_soundcloud_download_conversion_format(db_path: &Path, format: &str) -> Result<(), String> {
+    let incoming = format.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "original" => "original",
+        "mp3" | "mp3_320" => "mp3_320",
+        "mp3_256" => "mp3_256",
+        "mp3_192" => "mp3_192",
+        "aac_320" => "aac_320",
+        "aac_256" => "aac_256",
+        "wav" => "wav",
+        "flac" => "flac",
+        _ => return Err("Format de conversion SoundCloud invalide.".to_string()),
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('soundcloud_download_conversion_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_playlist_download_priority_order(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'playlist_download_priority_order'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "hypeddit_soundcloud_ytdl" => "hypeddit_soundcloud_ytdl",
+                "hypeddit_ytdl_soundcloud" => "hypeddit_ytdl_soundcloud",
+                "soundcloud_hypeddit_ytdl" => "soundcloud_hypeddit_ytdl",
+                "soundcloud_ytdl_hypeddit" => "soundcloud_ytdl_hypeddit",
+                "ytdl_hypeddit_soundcloud" => "ytdl_hypeddit_soundcloud",
+                "ytdl_soundcloud_hypeddit" => "ytdl_soundcloud_hypeddit",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
+        .unwrap_or_else(|| "hypeddit_soundcloud_ytdl".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_playlist_download_priority_order(db_path: &Path, order: &str) -> Result<(), String> {
+    let incoming = order.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "hypeddit_soundcloud_ytdl" => "hypeddit_soundcloud_ytdl",
+        "hypeddit_ytdl_soundcloud" => "hypeddit_ytdl_soundcloud",
+        "soundcloud_hypeddit_ytdl" => "soundcloud_hypeddit_ytdl",
+        "soundcloud_ytdl_hypeddit" => "soundcloud_ytdl_hypeddit",
+        "ytdl_hypeddit_soundcloud" => "ytdl_hypeddit_soundcloud",
+        "ytdl_soundcloud_hypeddit" => "ytdl_soundcloud_hypeddit",
+        _ => return Err("Ordre de priorite de telechargement playlist invalide.".to_string()),
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('playlist_download_priority_order', ?1)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![normalized],
@@ -1126,6 +1286,42 @@ pub fn set_hypeddit_download_start_timeout_seconds(db_path: &Path, seconds: i64)
             "
             INSERT INTO app_settings (key, value)
             VALUES ('hypeddit_download_start_timeout_seconds', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized.to_string()],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_retry_count(db_path: &Path) -> Result<i64, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'hypeddit_download_retry_count'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .and_then(|item| item.trim().parse::<i64>().ok())
+        .map(|value| value.clamp(1, 10))
+        .unwrap_or(3);
+
+    Ok(normalized)
+}
+
+pub fn set_hypeddit_download_retry_count(db_path: &Path, retry_count: i64) -> Result<(), String> {
+    let normalized = retry_count.clamp(1, 10);
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('hypeddit_download_retry_count', ?1)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             ",
             params![normalized.to_string()],
