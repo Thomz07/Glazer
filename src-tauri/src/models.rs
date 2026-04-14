@@ -31,6 +31,9 @@ pub struct PlaylistTrack {
     pub release_date: Option<String>,
     pub tag_list: Option<String>,
     pub label_name: Option<String>,
+    pub soundcloud_downloadable: Option<bool>,
+    pub soundcloud_download_url: Option<String>,
+    pub soundcloud_original_format: Option<String>,
     pub local_file: Option<LocalAudioFileInfo>,
 }
 

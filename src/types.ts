@@ -47,6 +47,9 @@ export type PlaylistTrack = {
   release_date?: string | null;
   tag_list?: string | null;
   label_name?: string | null;
+  soundcloud_downloadable?: boolean | null;
+  soundcloud_download_url?: string | null;
+  soundcloud_original_format?: string | null;
   local_file?: LocalAudioFileInfo | null;
 };
 

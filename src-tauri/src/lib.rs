@@ -207,6 +207,41 @@ fn sanitize_file_stem(input: &str) -> String {
     }
 }
 
+fn extract_filename_from_content_disposition(raw_header: &str) -> Option<String> {
+    for part in raw_header.split(';') {
+        let trimmed = part.trim();
+        if let Some(value) = trimmed.strip_prefix("filename*=UTF-8''") {
+            let decoded = urlencoding::decode(value).ok()?.to_string();
+            let candidate = decoded.trim().trim_matches('"').to_string();
+            if !candidate.is_empty() {
+                return Some(candidate);
+            }
+        }
+
+        if let Some(value) = trimmed.strip_prefix("filename=") {
+            let candidate = value.trim().trim_matches('"').to_string();
+            if !candidate.is_empty() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn extension_from_content_type(content_type: Option<&str>) -> Option<&'static str> {
+    let normalized = content_type?.split(';').next()?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "audio/mpeg" | "audio/mp3" => Some(".mp3"),
+        "audio/wav" | "audio/x-wav" | "audio/wave" => Some(".wav"),
+        "audio/flac" | "audio/x-flac" => Some(".flac"),
+        "audio/aac" => Some(".aac"),
+        "audio/mp4" | "audio/x-m4a" => Some(".m4a"),
+        "audio/ogg" => Some(".ogg"),
+        _ => None,
+    }
+}
+
 fn normalize_match_text(value: &str) -> String {
     let mut normalized = String::new();
     let mut previous_was_space = false;
@@ -525,6 +560,9 @@ fn get_playlist_track_local_file_info(
         release_date: None,
         tag_list: None,
         label_name: None,
+        soundcloud_downloadable: None,
+        soundcloud_download_url: None,
+        soundcloud_original_format: None,
         local_file: None,
     };
 
@@ -1061,24 +1099,11 @@ fn download_hypeddit_track_to_local_folder(
     }
 
     let hypeddit_url_trimmed = hypeddit_url.trim();
-    if hypeddit_url_trimmed.is_empty() {
-        return Err("Lien Hypeddit introuvable pour cette track.".to_string());
-    }
-    if !hypeddit_url_trimmed.to_lowercase().contains("hypeddit") {
-        return Err("Le lien associé n'est pas un lien Hypeddit.".to_string());
-    }
+    let track_permalink_url_trimmed = track_permalink_url.trim();
+    let use_hypeddit_workflow = hypeddit_url_trimmed.to_lowercase().contains("hypeddit");
 
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
-        .to_path_buf();
-    let script_path = project_root.join("scripts").join("hypeddit-download.mjs");
-
-    if !script_path.exists() {
-        return Err(format!(
-            "Script Hypeddit introuvable: {}",
-            script_path.display()
-        ));
+    if !use_hypeddit_workflow && track_permalink_url_trimmed.is_empty() {
+        return Err("URL SoundCloud de track manquante pour un download direct.".to_string());
     }
 
     let existing_file_path_trimmed = existing_file_path
@@ -1087,111 +1112,262 @@ fn download_hypeddit_track_to_local_folder(
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
         .unwrap_or_default();
-    let hypeddit_headless = db::get_hypeddit_download_headless(&state.db_path)?;
-    let hypeddit_comment = db::get_hypeddit_download_comment(&state.db_path)?;
-    let hypeddit_name = db::get_hypeddit_download_name(&state.db_path)?;
-    let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
-    let hypeddit_soundcloud_manual_cookies_json =
-        db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?;
-    let hypeddit_download_start_timeout_seconds =
-        db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
-    let hypeddit_click_delay_ms = db::get_hypeddit_click_delay_ms(&state.db_path)?;
-    let hypeddit_preload_app_sessions = db::get_hypeddit_preload_app_sessions(&state.db_path)?;
-    let browser_profile_dir = state
-        .db_path
-        .parent()
-        .map(|path| path.join("playwright-hypeddit-profile"))
-        .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
-    std::fs::create_dir_all(&browser_profile_dir)
-        .map_err(|error| format!("Impossible de préparer le profil navigateur Hypeddit: {error}"))?;
 
-    let manual_soundcloud_cookies_path = browser_profile_dir.join("soundcloud-manual-cookies.json");
-    let manual_soundcloud_cookies_arg = if hypeddit_soundcloud_manual_cookies_json.trim().is_empty() {
-        let _ = std::fs::remove_file(&manual_soundcloud_cookies_path);
-        String::new()
-    } else {
-        std::fs::write(
-            &manual_soundcloud_cookies_path,
-            hypeddit_soundcloud_manual_cookies_json.as_bytes(),
+    let mut result: HypedditScriptResult;
+
+    if !use_hypeddit_workflow {
+        let access_token = db::get_access_token(&state.db_path)?
+            .ok_or_else(|| "Aucun token SoundCloud trouvé. Connecte-toi d'abord.".to_string())?;
+
+        let direct_download_info = soundcloud::resolve_track_direct_download_info(
+            access_token.as_str(),
+            track_permalink_url_trimmed,
+        )?
+        .ok_or_else(|| "Cette track n'a pas de téléchargement direct SoundCloud disponible.".to_string())?;
+
+        let _ = app.emit(
+            "hypeddit-download-progress",
+            HypedditDownloadProgressPayload {
+                phase: "browser_ready".to_string(),
+            },
+        );
+        let _ = app.emit(
+            "hypeddit-download-progress",
+            HypedditDownloadProgressPayload {
+                phase: "gate_running".to_string(),
+            },
+        );
+        let _ = app.emit(
+            "hypeddit-download-progress",
+            HypedditDownloadProgressPayload {
+                phase: "download_started".to_string(),
+            },
+        );
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|error| format!("Client HTTP SoundCloud indisponible: {error}"))?;
+
+        let mut response = client
+            .get(direct_download_info.download_url.as_str())
+            .header("Authorization", format!("OAuth {access_token}"))
+            .send()
+            .map_err(|error| format!("Download direct SoundCloud impossible: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Download direct SoundCloud en erreur ({}).",
+                response.status()
+            ));
+        }
+
+        let content_disposition_filename = response
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok())
+            .and_then(extract_filename_from_content_disposition);
+
+        let content_type_extension = extension_from_content_type(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
         )
-        .map_err(|error| format!("Impossible d'ecrire les cookies SoundCloud manuels: {error}"))?;
-        manual_soundcloud_cookies_path.to_string_lossy().to_string()
-    };
+        .map(|value| value.to_string());
 
-    let mut child = Command::new("node")
-        .arg(script_path)
-        .arg(hypeddit_url_trimmed)
-        .arg(folder.to_string_lossy().to_string())
-        .arg(if overwrite_existing { "true" } else { "false" })
-        .arg(existing_file_path_trimmed)
-        .arg(if hypeddit_headless { "true" } else { "false" })
-        .arg(hypeddit_comment)
-        .arg(hypeddit_name)
-        .arg(hypeddit_email)
-        .arg(if hypeddit_preload_app_sessions {
-            "true"
+        let fallback_extension = content_type_extension
+            .or_else(|| {
+                direct_download_info
+                    .original_format
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!(".{}", value.to_lowercase()))
+            })
+            .unwrap_or_else(|| ".mp3".to_string());
+
+        let fallback_file_name = format!("{}{}", sanitize_file_stem(track_title.as_str()), fallback_extension);
+        let suggested_file_name = content_disposition_filename
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback_file_name);
+
+        let mut target_path = if existing_file_path_trimmed.is_empty() {
+            folder.join(suggested_file_name)
         } else {
-            "false"
-        })
-        .arg(if hypeddit_preload_app_sessions {
-            "true"
+            PathBuf::from(existing_file_path_trimmed.as_str())
+        };
+
+        if target_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        {
+            target_path.set_extension(fallback_extension.trim_start_matches('.'));
+        }
+
+        let existed_before_save = target_path.exists();
+        if existed_before_save {
+            if overwrite_existing {
+                std::fs::remove_file(&target_path)
+                    .map_err(|error| format!("Impossible d'écraser le fichier existant: {error}"))?;
+            } else {
+                return Err(format!("File already exists at {}", target_path.display()));
+            }
+        }
+
+        let _ = app.emit(
+            "hypeddit-download-progress",
+            HypedditDownloadProgressPayload {
+                phase: "file_saving".to_string(),
+            },
+        );
+
+        let mut output_file = std::fs::File::create(&target_path)
+            .map_err(|error| format!("Impossible de créer le fichier cible: {error}"))?;
+        std::io::copy(&mut response, &mut output_file)
+            .map_err(|error| format!("Écriture du fichier téléchargé impossible: {error}"))?;
+
+        let _ = app.emit(
+            "hypeddit-download-progress",
+            HypedditDownloadProgressPayload {
+                phase: "browser_cut".to_string(),
+            },
+        );
+
+        let file_name = target_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "track.mp3".to_string());
+
+        result = HypedditScriptResult {
+            file_path: target_path.to_string_lossy().to_string(),
+            file_name,
+            overwrote_existing: overwrite_existing && existed_before_save,
+        };
+    } else {
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
+            .to_path_buf();
+        let script_path = project_root.join("scripts").join("hypeddit-download.mjs");
+
+        if !script_path.exists() {
+            return Err(format!(
+                "Script Hypeddit introuvable: {}",
+                script_path.display()
+            ));
+        }
+
+        let hypeddit_headless = db::get_hypeddit_download_headless(&state.db_path)?;
+        let hypeddit_comment = db::get_hypeddit_download_comment(&state.db_path)?;
+        let hypeddit_name = db::get_hypeddit_download_name(&state.db_path)?;
+        let hypeddit_email = db::get_hypeddit_download_email(&state.db_path)?;
+        let hypeddit_soundcloud_manual_cookies_json =
+            db::get_hypeddit_soundcloud_manual_cookies_json(&state.db_path)?;
+        let hypeddit_download_start_timeout_seconds =
+            db::get_hypeddit_download_start_timeout_seconds(&state.db_path)?;
+        let hypeddit_click_delay_ms = db::get_hypeddit_click_delay_ms(&state.db_path)?;
+        let hypeddit_preload_app_sessions = db::get_hypeddit_preload_app_sessions(&state.db_path)?;
+        let browser_profile_dir = state
+            .db_path
+            .parent()
+            .map(|path| path.join("playwright-hypeddit-profile"))
+            .ok_or_else(|| "Impossible de localiser le dossier app data pour le profil navigateur.".to_string())?;
+        std::fs::create_dir_all(&browser_profile_dir)
+            .map_err(|error| format!("Impossible de préparer le profil navigateur Hypeddit: {error}"))?;
+
+        let manual_soundcloud_cookies_path = browser_profile_dir.join("soundcloud-manual-cookies.json");
+        let manual_soundcloud_cookies_arg = if hypeddit_soundcloud_manual_cookies_json.trim().is_empty() {
+            let _ = std::fs::remove_file(&manual_soundcloud_cookies_path);
+            String::new()
         } else {
-            "false"
-        })
-        .arg(browser_profile_dir.to_string_lossy().to_string())
-        .arg(hypeddit_download_start_timeout_seconds.to_string())
-        .arg(hypeddit_click_delay_ms.to_string())
-        .arg(manual_soundcloud_cookies_arg)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .current_dir(project_root)
-        .spawn()
-        .map_err(|error| format!("Impossible de lancer le download Hypeddit: {error}"))?;
+            std::fs::write(
+                &manual_soundcloud_cookies_path,
+                hypeddit_soundcloud_manual_cookies_json.as_bytes(),
+            )
+            .map_err(|error| format!("Impossible d'ecrire les cookies SoundCloud manuels: {error}"))?;
+            manual_soundcloud_cookies_path.to_string_lossy().to_string()
+        };
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Impossible de lire la sortie du download Hypeddit".to_string())?;
-    let reader = BufReader::new(stdout);
+        let mut child = Command::new("node")
+            .arg(script_path)
+            .arg(hypeddit_url_trimmed)
+            .arg(folder.to_string_lossy().to_string())
+            .arg(if overwrite_existing { "true" } else { "false" })
+            .arg(existing_file_path_trimmed.as_str())
+            .arg(if hypeddit_headless { "true" } else { "false" })
+            .arg(hypeddit_comment)
+            .arg(hypeddit_name)
+            .arg(hypeddit_email)
+            .arg(if hypeddit_preload_app_sessions {
+                "true"
+            } else {
+                "false"
+            })
+            .arg(if hypeddit_preload_app_sessions {
+                "true"
+            } else {
+                "false"
+            })
+            .arg(browser_profile_dir.to_string_lossy().to_string())
+            .arg(hypeddit_download_start_timeout_seconds.to_string())
+            .arg(hypeddit_click_delay_ms.to_string())
+            .arg(manual_soundcloud_cookies_arg)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .current_dir(project_root)
+            .spawn()
+            .map_err(|error| format!("Impossible de lancer le download Hypeddit: {error}"))?;
 
-    let mut result_payload: Option<String> = None;
-    let mut script_error: Option<String> = None;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Impossible de lire la sortie du download Hypeddit".to_string())?;
+        let reader = BufReader::new(stdout);
 
-    for line in reader.lines() {
-        let line = line.map_err(|error| format!("Lecture download Hypeddit impossible: {error}"))?;
-        if let Some(value) = line.strip_prefix("__PROGRESS__:") {
-            let _ = app.emit(
-                "hypeddit-download-progress",
-                HypedditDownloadProgressPayload {
-                    phase: value.to_string(),
-                },
-            );
+        let mut result_payload: Option<String> = None;
+        let mut script_error: Option<String> = None;
+
+        for line in reader.lines() {
+            let line = line.map_err(|error| format!("Lecture download Hypeddit impossible: {error}"))?;
+            if let Some(value) = line.strip_prefix("__PROGRESS__:") {
+                let _ = app.emit(
+                    "hypeddit-download-progress",
+                    HypedditDownloadProgressPayload {
+                        phase: value.to_string(),
+                    },
+                );
+            }
+            if let Some(value) = line.strip_prefix("__LOG__:") {
+                println!("[hypeddit] {value}");
+            }
+            if let Some(value) = line.strip_prefix("__ERROR__:") {
+                script_error = Some(value.to_string());
+            }
+            if let Some(value) = line.strip_prefix("__RESULT__:") {
+                result_payload = Some(value.to_string());
+            }
         }
-        if let Some(value) = line.strip_prefix("__LOG__:") {
-            println!("[hypeddit] {value}");
+
+        let status = child
+            .wait()
+            .map_err(|error| format!("Attente download Hypeddit impossible: {error}"))?;
+
+        if !status.success() {
+            if let Some(script_error) = script_error {
+                return Err(format!("Download Hypeddit en erreur: {script_error}"));
+            }
+            return Err("Download Hypeddit en erreur".to_string());
         }
-        if let Some(value) = line.strip_prefix("__ERROR__:") {
-            script_error = Some(value.to_string());
-        }
-        if let Some(value) = line.strip_prefix("__RESULT__:") {
-            result_payload = Some(value.to_string());
-        }
+
+        let json_payload = result_payload.ok_or_else(|| "Download Hypeddit sans résultat".to_string())?;
+        result = serde_json::from_str::<HypedditScriptResult>(json_payload.as_str())
+            .map_err(|error| format!("Réponse download Hypeddit invalide: {error}"))?;
     }
-
-    let status = child
-        .wait()
-        .map_err(|error| format!("Attente download Hypeddit impossible: {error}"))?;
-
-    if !status.success() {
-        if let Some(script_error) = script_error {
-            return Err(format!("Download Hypeddit en erreur: {script_error}"));
-        }
-        return Err("Download Hypeddit en erreur".to_string());
-    }
-
-    let json_payload = result_payload.ok_or_else(|| "Download Hypeddit sans résultat".to_string())?;
-    let mut result: HypedditScriptResult = serde_json::from_str(json_payload.as_str())
-        .map_err(|error| format!("Réponse download Hypeddit invalide: {error}"))?;
 
     let rename_with_soundcloud_title =
         db::get_hypeddit_download_rename_with_soundcloud_title(&state.db_path)?;

@@ -106,6 +106,12 @@ struct SoundCloudTrack {
     tag_list: Option<String>,
     #[serde(default)]
     label_name: Option<String>,
+    #[serde(default)]
+    downloadable: Option<bool>,
+    #[serde(default)]
+    download_url: Option<String>,
+    #[serde(default)]
+    original_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +154,17 @@ struct ResolvedTrack {
     tag_list: Option<String>,
     #[serde(default)]
     label_name: Option<String>,
+    #[serde(default)]
+    downloadable: Option<bool>,
+    #[serde(default)]
+    download_url: Option<String>,
+    #[serde(default)]
+    original_format: Option<String>,
+}
+
+pub struct TrackDirectDownloadInfo {
+    pub download_url: String,
+    pub original_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -698,6 +715,9 @@ fn map_sc_track_to_playlist_track(track: SoundCloudTrack) -> PlaylistTrack {
         release_date: track.release_date,
         tag_list: track.tag_list,
         label_name: track.label_name,
+        soundcloud_downloadable: track.downloadable,
+        soundcloud_download_url: track.download_url,
+        soundcloud_original_format: track.original_format,
         local_file: None,
     }
 }
@@ -793,6 +813,9 @@ fn scrape_missing_tracks_with_browser_automation(
             release_date: None,
             tag_list: None,
             label_name: None,
+            soundcloud_downloadable: None,
+            soundcloud_download_url: None,
+            soundcloud_original_format: None,
             local_file: None,
         })
         .collect())
@@ -907,6 +930,63 @@ fn enrich_tracks_metadata_from_permalink(access_token: &str, tracks: &mut Vec<Pl
         if track.label_name.is_none() {
             track.label_name = resolved.label_name;
         }
+        if track.soundcloud_downloadable.is_none() {
+            track.soundcloud_downloadable = resolved.downloadable;
+        }
+        if track.soundcloud_download_url.is_none() {
+            track.soundcloud_download_url = resolved.download_url;
+        }
+        if track.soundcloud_original_format.is_none() {
+            track.soundcloud_original_format = resolved.original_format;
+        }
+    }
+}
+
+pub fn resolve_track_direct_download_info(
+    access_token: &str,
+    track_permalink_url: &str,
+) -> Result<Option<TrackDirectDownloadInfo>, String> {
+    let normalized_permalink = clean_soundcloud_permalink(Some(track_permalink_url))
+        .ok_or_else(|| "URL SoundCloud de track invalide.".to_string())?;
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("Client HTTP SoundCloud indisponible: {error}"))?;
+
+    let response = client
+        .get(RESOLVE_URL)
+        .query(&[("url", normalized_permalink.as_str())])
+        .header("accept", "application/json; charset=utf-8")
+        .header("Authorization", format!("OAuth {access_token}"))
+        .send()
+        .map_err(|error| format!("Resolve SoundCloud impossible: {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Resolve SoundCloud en erreur ({}).", response.status()));
+    }
+
+    let resolved = response
+        .json::<ResolvedTrack>()
+        .map_err(|error| format!("Réponse resolve SoundCloud invalide: {error}"))?;
+
+    if !resolved.downloadable.unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let download_url = resolved
+        .download_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    match download_url {
+        Some(url) => Ok(Some(TrackDirectDownloadInfo {
+            download_url: url,
+            original_format: resolved.original_format,
+        })),
+        None => Ok(None),
     }
 }
 

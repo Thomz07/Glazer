@@ -746,18 +746,22 @@ pub fn set_ytdl_download_rename_with_soundcloud_title(db_path: &Path, enabled: b
 }
 
 // Backward-compatible shared getters/setters now map to Hypeddit-specific settings.
+#[allow(dead_code)]
 pub fn get_download_embed_cover(db_path: &Path) -> Result<bool, String> {
     get_hypeddit_download_embed_cover(db_path)
 }
 
+#[allow(dead_code)]
 pub fn set_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
     set_hypeddit_download_embed_cover(db_path, enabled)
 }
 
+#[allow(dead_code)]
 pub fn get_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
     get_hypeddit_download_rename_with_soundcloud_title(db_path)
 }
 
+#[allow(dead_code)]
 pub fn set_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
     set_hypeddit_download_rename_with_soundcloud_title(db_path, enabled)
 }

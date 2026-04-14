@@ -1544,7 +1544,14 @@ function App() {
       return;
     }
 
-    if (!selectedTrackInfo.associated_url || getAssociatedSource(selectedTrackInfo.associated_url) !== "hypeddit") {
+    const isHypedditSource =
+      Boolean(selectedTrackInfo.associated_url) &&
+      getAssociatedSource(selectedTrackInfo.associated_url) === "hypeddit";
+    const canUseDirectSoundcloudDownload = Boolean(
+      selectedTrackInfo.permalink_url?.trim() && selectedTrackInfo.soundcloud_downloadable,
+    );
+
+    if (!isHypedditSource && !canUseDirectSoundcloudDownload) {
       setStatus(t("hypedditDownloadMissingLink"));
       return;
     }
@@ -1566,7 +1573,7 @@ function App() {
         playlistId: selectedPlaylistDetails.id,
         trackPermalinkUrl: selectedTrackInfo.permalink_url,
         trackTitle: selectedTrackInfo.title,
-        hypedditUrl: selectedTrackInfo.associated_url,
+        hypedditUrl: isHypedditSource ? selectedTrackInfo.associated_url : selectedTrackInfo.permalink_url,
         artworkUrl: resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url ?? null,
         overwriteExisting: overwriteExistingHypedditDownload,
         existingFilePath: selectedTrackInfo.local_file?.file_path ?? null,
@@ -2016,7 +2023,7 @@ function App() {
         }
       }
 
-      if (downloadSourceFilter === "downloadable" && !track.associated_url) {
+      if (downloadSourceFilter === "downloadable" && !track.associated_url && !track.soundcloud_downloadable) {
         return false;
       }
       if (downloadSourceFilter === "hypeddit" && getAssociatedSource(track.associated_url) !== "hypeddit") {
@@ -2264,11 +2271,25 @@ function App() {
   }
 
   const filteredTracks = selectedPlaylistDetails ? getFilteredTracks(selectedPlaylistDetails.tracks) : [];
+  const isSelectedTrackHypedditSource =
+    Boolean(selectedTrackInfo?.associated_url) &&
+    getAssociatedSource(selectedTrackInfo?.associated_url) === "hypeddit";
+  const canUseSelectedTrackDirectSoundcloudDownload = Boolean(
+    selectedTrackInfo?.permalink_url?.trim() && selectedTrackInfo?.soundcloud_downloadable,
+  );
   const canDownloadSelectedTrackFromHypeddit =
     hasAvailableLocalFolder &&
-    Boolean(selectedTrackInfo?.associated_url) &&
-    getAssociatedSource(selectedTrackInfo?.associated_url) === "hypeddit" &&
+    (
+      isSelectedTrackHypedditSource ||
+      canUseSelectedTrackDirectSoundcloudDownload
+    ) &&
     Boolean(selectedTrackInfo?.permalink_url);
+  const hypedditDownloadButtonKey = isSelectedTrackHypedditSource
+    ? "hypedditDownloadButton"
+    : "soundcloudDownloadButton";
+  const hypedditDownloadModalTitleKey = isSelectedTrackHypedditSource
+    ? "hypedditDownloadModalTitle"
+    : "soundcloudDownloadModalTitle";
   const canRunYtDlDownload =
     debugSettings.show_ytdl_track_download_button &&
     hasAvailableLocalFolder &&
@@ -2441,6 +2462,8 @@ function App() {
                   selectedTrackInfo={selectedTrackInfo}
                   hasAvailableLocalFolder={hasAvailableLocalFolder}
                   canDownloadSelectedTrackFromHypeddit={canDownloadSelectedTrackFromHypeddit}
+                  hypedditDownloadButtonKey={hypedditDownloadButtonKey}
+                  hypedditDownloadModalTitleKey={hypedditDownloadModalTitleKey}
                   canRunYtDlDownload={canRunYtDlDownload}
                   overwriteExistingHypedditDownload={overwriteExistingHypedditDownload}
                   setOverwriteExistingHypedditDownload={setOverwriteExistingHypedditDownload}

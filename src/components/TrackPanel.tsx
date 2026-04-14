@@ -12,6 +12,8 @@ type TrackPanelProps = {
   selectedTrackInfo: PlaylistTrack;
   hasAvailableLocalFolder: boolean;
   canDownloadSelectedTrackFromHypeddit: boolean;
+  hypedditDownloadButtonKey: TranslationKey;
+  hypedditDownloadModalTitleKey: TranslationKey;
   canRunYtDlDownload: boolean;
   overwriteExistingHypedditDownload: boolean;
   setOverwriteExistingHypedditDownload: (value: boolean) => void;
@@ -76,6 +78,8 @@ export function TrackPanel({
   selectedTrackInfo,
   hasAvailableLocalFolder,
   canDownloadSelectedTrackFromHypeddit,
+  hypedditDownloadButtonKey,
+  hypedditDownloadModalTitleKey,
   canRunYtDlDownload,
   overwriteExistingHypedditDownload,
   setOverwriteExistingHypedditDownload,
@@ -285,7 +289,7 @@ export function TrackPanel({
                 }}
                 disabled={downloadingFromHypeddit}
               >
-                {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t("hypedditDownloadButton")}
+                {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t(hypedditDownloadButtonKey)}
               </button>
             ) : null}
 
@@ -358,7 +362,7 @@ export function TrackPanel({
 
         <CenteredModal
           open={showHypedditDownloadModal}
-          title={t("hypedditDownloadModalTitle")}
+          title={t(hypedditDownloadModalTitleKey)}
           closeLabel={t("close")}
           onClose={closeHypedditDownloadModal}
           showCloseButton={false}
