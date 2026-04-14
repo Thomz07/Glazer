@@ -1525,8 +1525,37 @@ fn estimate_average_cutoff_hz(
         }
     }
 
-    let index = cutoff_index?;
-    let hz = (index as f32 * bin_hz).round() as i64;
+    let base_index = cutoff_index?;
+
+    // High-bias pass: keep the highest frequency region that still has sustained
+    // energy above a relaxed threshold, to avoid underestimating the cutoff.
+    let relaxed_threshold_db = (threshold_db - 5.5).max(-42.0);
+    let sustain_relaxed_bins = ((350.0f32 * fft_size as f32) / sample_rate as f32)
+        .round()
+        .max(4.0) as usize;
+
+    let mut highest_reliable_index: Option<usize> = None;
+    if relative_db.len() > sustain_relaxed_bins + 1 {
+        for index in min_index..(relative_db.len() - sustain_relaxed_bins) {
+            let tail = &relative_db[index..=index + sustain_relaxed_bins];
+            let above_count = tail
+                .iter()
+                .filter(|value| **value >= relaxed_threshold_db)
+                .count();
+
+            // Require a sustained band (about 70% bins above threshold) so random
+            // HF spikes don't artificially push the estimate too far.
+            if above_count * 10 >= tail.len() * 7 {
+                highest_reliable_index = Some(index + sustain_relaxed_bins / 2);
+            }
+        }
+    }
+
+    let final_index = highest_reliable_index
+        .map(|index| index.max(base_index))
+        .unwrap_or(base_index);
+
+    let hz = (final_index as f32 * bin_hz).round() as i64;
     Some(((hz / 100) * 100).max(100))
 }
 
