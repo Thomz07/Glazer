@@ -656,66 +656,110 @@ pub fn set_playlist_cover_mode(db_path: &Path, mode: &str) -> Result<(), String>
     Ok(())
 }
 
-pub fn get_download_embed_cover(db_path: &Path) -> Result<bool, String> {
-    let connection = open_connection(db_path)?;
-    let value = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = 'download_embed_cover'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok();
-
-    Ok(value
+fn parse_bool_setting(value: Option<String>, default_value: bool) -> bool {
+    value
         .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
-        .unwrap_or(false))
+        .unwrap_or(default_value)
+}
+
+fn get_bool_setting_by_keys(db_path: &Path, keys: &[&str], default_value: bool) -> Result<bool, String> {
+    let connection = open_connection(db_path)?;
+    for key in keys {
+        let value = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+
+        if value.is_some() {
+            return Ok(parse_bool_setting(value, default_value));
+        }
+    }
+
+    Ok(default_value)
+}
+
+fn set_bool_setting(db_path: &Path, key: &str, enabled: bool) -> Result<(), String> {
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![key, if enabled { "true" } else { "false" }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_hypeddit_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &["hypeddit_download_embed_cover", "download_embed_cover"],
+        false,
+    )
+}
+
+pub fn set_hypeddit_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "hypeddit_download_embed_cover", enabled)
+}
+
+pub fn get_hypeddit_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &["hypeddit_download_rename_with_soundcloud_title", "download_rename_with_soundcloud_title"],
+        false,
+    )
+}
+
+pub fn set_hypeddit_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "hypeddit_download_rename_with_soundcloud_title", enabled)
+}
+
+pub fn get_ytdl_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &["ytdl_download_embed_cover", "download_embed_cover"],
+        false,
+    )
+}
+
+pub fn set_ytdl_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "ytdl_download_embed_cover", enabled)
+}
+
+pub fn get_ytdl_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &["ytdl_download_rename_with_soundcloud_title", "download_rename_with_soundcloud_title"],
+        false,
+    )
+}
+
+pub fn set_ytdl_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "ytdl_download_rename_with_soundcloud_title", enabled)
+}
+
+// Backward-compatible shared getters/setters now map to Hypeddit-specific settings.
+pub fn get_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    get_hypeddit_download_embed_cover(db_path)
 }
 
 pub fn set_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
-    let connection = open_connection(db_path)?;
-    connection
-        .execute(
-            "
-            INSERT INTO app_settings (key, value)
-            VALUES ('download_embed_cover', ?1)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            ",
-            params![if enabled { "true" } else { "false" }],
-        )
-        .map_err(|error| error.to_string())?;
-
-    Ok(())
+    set_hypeddit_download_embed_cover(db_path, enabled)
 }
 
 pub fn get_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
-    let connection = open_connection(db_path)?;
-    let value = connection
-        .query_row(
-            "SELECT value FROM app_settings WHERE key = 'download_rename_with_soundcloud_title'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok();
-
-    Ok(value
-        .map(|item| item.eq_ignore_ascii_case("true") || item == "1")
-        .unwrap_or(false))
+    get_hypeddit_download_rename_with_soundcloud_title(db_path)
 }
 
 pub fn set_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
-    let connection = open_connection(db_path)?;
-    connection
-        .execute(
-            "
-            INSERT INTO app_settings (key, value)
-            VALUES ('download_rename_with_soundcloud_title', ?1)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            ",
-            params![if enabled { "true" } else { "false" }],
-        )
-        .map_err(|error| error.to_string())?;
-
-    Ok(())
+    set_hypeddit_download_rename_with_soundcloud_title(db_path, enabled)
 }
 
 pub fn get_hypeddit_download_conversion_format(db_path: &Path) -> Result<String, String> {
@@ -1521,6 +1565,36 @@ pub fn get_playlist_track_local_file_link_info_by_file_path(
         .ok();
 
     Ok(result)
+}
+
+pub fn list_playlist_linked_file_paths(db_path: &Path, playlist_id: i64) -> Result<Vec<String>, String> {
+    let connection = open_connection(db_path)?;
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT file_path
+            FROM playlist_track_file_links
+            WHERE playlist_id = ?1
+              AND file_path IS NOT NULL
+              AND TRIM(file_path) <> ''
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map(params![playlist_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+
+    let mut file_paths = Vec::new();
+    for row in rows {
+        let value = row.map_err(|error| error.to_string())?;
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            file_paths.push(trimmed.to_string());
+        }
+    }
+
+    Ok(file_paths)
 }
 
 pub fn move_playlist_track_local_file_link(

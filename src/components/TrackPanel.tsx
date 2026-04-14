@@ -15,10 +15,14 @@ type TrackPanelProps = {
   canRunYtDlDownload: boolean;
   overwriteExistingHypedditDownload: boolean;
   setOverwriteExistingHypedditDownload: (value: boolean) => void;
-  downloadEmbedCover: boolean;
-  downloadRenameWithSoundcloudTitle: boolean;
-  onSaveDownloadEmbedCover: (enabled: boolean) => void;
-  onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  hypedditDownloadEmbedCover: boolean;
+  hypedditDownloadRenameWithSoundcloudTitle: boolean;
+  ytdlDownloadEmbedCover: boolean;
+  ytdlDownloadRenameWithSoundcloudTitle: boolean;
+  onSaveHypedditDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveHypedditDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveYtDlDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveYtDlDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   hypedditDownloadPhase: string;
   availableMoveTargetPlaylists: Playlist[];
   targetPlaylistIdForMove: number | "";
@@ -28,6 +32,7 @@ type TrackPanelProps = {
   exportingSpectrogram: boolean;
   dissociatingLocalFile: boolean;
   associatingLocalFile: boolean;
+  associatingLocalFileByName: boolean;
   downloadingFromHypeddit: boolean;
   downloadingFromYtDl: boolean;
   downloadingCover: boolean;
@@ -43,6 +48,7 @@ type TrackPanelProps = {
   onExportSpectrogram: () => void;
   onDissociateLocalFile: () => void;
   onAssociateLocalFile: () => void;
+  onAssociateLocalFileByName: () => void;
   onPrepareHypedditDownloadModal: () => Promise<boolean>;
   onPrepareYtDlDownloadModal: () => Promise<boolean>;
   onDownloadFromHypeddit: () => void;
@@ -73,10 +79,14 @@ export function TrackPanel({
   canRunYtDlDownload,
   overwriteExistingHypedditDownload,
   setOverwriteExistingHypedditDownload,
-  downloadEmbedCover,
-  downloadRenameWithSoundcloudTitle,
-  onSaveDownloadEmbedCover,
-  onSaveDownloadRenameWithSoundcloudTitle,
+  hypedditDownloadEmbedCover,
+  hypedditDownloadRenameWithSoundcloudTitle,
+  ytdlDownloadEmbedCover,
+  ytdlDownloadRenameWithSoundcloudTitle,
+  onSaveHypedditDownloadEmbedCover,
+  onSaveHypedditDownloadRenameWithSoundcloudTitle,
+  onSaveYtDlDownloadEmbedCover,
+  onSaveYtDlDownloadRenameWithSoundcloudTitle,
   hypedditDownloadPhase,
   availableMoveTargetPlaylists,
   targetPlaylistIdForMove,
@@ -86,6 +96,7 @@ export function TrackPanel({
   exportingSpectrogram,
   dissociatingLocalFile,
   associatingLocalFile,
+  associatingLocalFileByName,
   downloadingFromHypeddit,
   downloadingFromYtDl,
   downloadingCover,
@@ -101,6 +112,7 @@ export function TrackPanel({
   onExportSpectrogram,
   onDissociateLocalFile,
   onAssociateLocalFile,
+  onAssociateLocalFileByName,
   onPrepareHypedditDownloadModal,
   onPrepareYtDlDownloadModal,
   onDownloadFromHypeddit,
@@ -375,8 +387,8 @@ export function TrackPanel({
           <label className="setting-toggle actions-option">
             <input
               type="checkbox"
-              checked={downloadRenameWithSoundcloudTitle}
-              onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              checked={hypedditDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveHypedditDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
               disabled={downloadingFromHypeddit}
             />
             <span>{t("downloadRenameSetting")}</span>
@@ -385,8 +397,8 @@ export function TrackPanel({
           <label className="setting-toggle actions-option">
             <input
               type="checkbox"
-              checked={downloadEmbedCover}
-              onChange={(event) => onSaveDownloadEmbedCover(event.currentTarget.checked)}
+              checked={hypedditDownloadEmbedCover}
+              onChange={(event) => onSaveHypedditDownloadEmbedCover(event.currentTarget.checked)}
               disabled={downloadingFromHypeddit}
             />
             <span>{t("downloadEmbedCoverSetting")}</span>
@@ -443,8 +455,8 @@ export function TrackPanel({
           <label className="setting-toggle actions-option">
             <input
               type="checkbox"
-              checked={downloadRenameWithSoundcloudTitle}
-              onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              checked={ytdlDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveYtDlDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
               disabled={downloadingFromYtDl}
             />
             <span>{t("downloadRenameSetting")}</span>
@@ -453,8 +465,8 @@ export function TrackPanel({
           <label className="setting-toggle actions-option">
             <input
               type="checkbox"
-              checked={downloadEmbedCover}
-              onChange={(event) => onSaveDownloadEmbedCover(event.currentTarget.checked)}
+              checked={ytdlDownloadEmbedCover}
+              onChange={(event) => onSaveYtDlDownloadEmbedCover(event.currentTarget.checked)}
               disabled={downloadingFromYtDl}
             />
             <span>{t("downloadEmbedCoverSetting")}</span>
@@ -634,6 +646,13 @@ export function TrackPanel({
                     disabled={associatingLocalFile}
                   >
                     {associatingLocalFile ? t("localAssociateRunning") : t("localAssociateButton")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onAssociateLocalFileByName}
+                    disabled={associatingLocalFileByName}
+                  >
+                    {associatingLocalFileByName ? t("localAssociateByNameRunning") : t("localAssociateByNameButton")}
                   </button>
                 </div>
               )}

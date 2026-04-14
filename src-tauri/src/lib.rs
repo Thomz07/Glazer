@@ -46,8 +46,10 @@ struct DebugSettings {
 #[derive(Serialize)]
 struct MiscSettings {
     playlist_cover_mode: String,
-    download_embed_cover: bool,
-    download_rename_with_soundcloud_title: bool,
+    hypeddit_download_embed_cover: bool,
+    hypeddit_download_rename_with_soundcloud_title: bool,
+    ytdl_download_embed_cover: bool,
+    ytdl_download_rename_with_soundcloud_title: bool,
     hypeddit_download_conversion_format: String,
     ytdl_download_file_type: String,
     analysis_auto_apply_frequency_max: bool,
@@ -111,6 +113,20 @@ struct PlaylistGlobalAudioAnalysisResult {
 struct MovePlaylistTrackResult {
     moved_local_link: bool,
     moved_local_file_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FilenameAssociationTrackInput {
+    permalink_url: String,
+    title: String,
+    artist: Option<String>,
+    local_file_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FilenameAssociationBatchResult {
+    attempted: usize,
+    matched: usize,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +204,124 @@ fn sanitize_file_stem(input: &str) -> String {
         "track".to_string()
     } else {
         collapsed.to_string()
+    }
+}
+
+fn normalize_match_text(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_space = false;
+
+    for character in value.to_lowercase().chars() {
+        if character.is_alphanumeric() {
+            normalized.push(character);
+            previous_was_space = false;
+        } else if !previous_was_space {
+            normalized.push(' ');
+            previous_was_space = true;
+        }
+    }
+
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn file_stem_from_path(file_path: &str) -> String {
+    Path::new(file_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or_default()
+}
+
+fn score_filename_match(
+    track_title: &str,
+    track_artist: Option<&str>,
+    scanned_file: &local_files::ScannedAudioFile,
+) -> i32 {
+    let title_norm = normalize_match_text(track_title);
+    if title_norm.is_empty() {
+        return 0;
+    }
+
+    let artist_norm = track_artist
+        .map(normalize_match_text)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+
+    let file_title_source = scanned_file
+        .local_title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| scanned_file.file_name.as_str());
+    let file_title_norm = normalize_match_text(file_title_source);
+
+    let file_artist_norm = scanned_file
+        .local_artist
+        .as_deref()
+        .map(normalize_match_text)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+
+    let stem_norm = normalize_match_text(file_stem_from_path(scanned_file.file_name.as_str()).as_str());
+
+    let mut score = 0;
+
+    if file_title_norm == title_norm || stem_norm == title_norm {
+        score += 120;
+    } else {
+        if file_title_norm.contains(title_norm.as_str()) || title_norm.contains(file_title_norm.as_str()) {
+            score += 70;
+        }
+
+        if stem_norm.contains(title_norm.as_str()) || title_norm.contains(stem_norm.as_str()) {
+            score += 80;
+        }
+    }
+
+    if !artist_norm.is_empty() {
+        if file_artist_norm == artist_norm {
+            score += 40;
+        } else if file_artist_norm.contains(artist_norm.as_str()) || stem_norm.contains(artist_norm.as_str()) {
+            score += 20;
+        }
+
+        if stem_norm.contains(title_norm.as_str()) && stem_norm.contains(artist_norm.as_str()) {
+            score += 35;
+        }
+    }
+
+    score
+}
+
+fn pick_best_match_for_track(
+    scanned_files: &[local_files::ScannedAudioFile],
+    used_file_paths: &std::collections::HashSet<String>,
+    track_title: &str,
+    track_artist: Option<&str>,
+) -> Option<String> {
+    let mut best_score = 0;
+    let mut best_path: Option<String> = None;
+
+    for scanned_file in scanned_files {
+        let file_path = scanned_file.file_path.trim();
+        if file_path.is_empty() {
+            continue;
+        }
+
+        if used_file_paths.contains(file_path) {
+            continue;
+        }
+
+        let score = score_filename_match(track_title, track_artist, scanned_file);
+        if score > best_score {
+            best_score = score;
+            best_path = Some(file_path.to_string());
+        }
+    }
+
+    if best_score >= 90 {
+        best_path
+    } else {
+        None
     }
 }
 
@@ -461,6 +595,128 @@ fn associate_playlist_track_local_file(
         track_permalink_url.trim(),
         file_path.trim(),
     )
+}
+
+#[tauri::command]
+fn associate_playlist_track_local_file_by_filename(
+    state: State<AppState>,
+    playlist_id: i64,
+    track_permalink_url: String,
+    track_title: String,
+    track_artist: Option<String>,
+) -> Result<bool, String> {
+    let permalink = track_permalink_url.trim();
+    if permalink.is_empty() {
+        return Err("URL SoundCloud introuvable pour cette piste.".to_string());
+    }
+
+    let title = track_title.trim();
+    if title.is_empty() {
+        return Ok(false);
+    }
+
+    let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
+        .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
+    let scanned_files = local_files::scan_audio_files(folder_path.as_str())?;
+
+    let mut used_file_paths = std::collections::HashSet::new();
+    for linked_path in db::list_playlist_linked_file_paths(&state.db_path, playlist_id)? {
+        used_file_paths.insert(linked_path);
+    }
+
+    if let Some(existing) = db::get_playlist_track_local_file_link_info(&state.db_path, playlist_id, permalink)? {
+        used_file_paths.remove(existing.0.as_str());
+    }
+
+    let best_match = pick_best_match_for_track(
+        scanned_files.as_slice(),
+        &used_file_paths,
+        title,
+        track_artist.as_deref(),
+    );
+
+    let Some(best_file_path) = best_match else {
+        return Ok(false);
+    };
+
+    db::upsert_playlist_track_file_link_manual(
+        &state.db_path,
+        playlist_id,
+        permalink,
+        best_file_path.as_str(),
+    )?;
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn associate_playlist_tracks_local_files_by_filename(
+    state: State<AppState>,
+    playlist_id: i64,
+    tracks: Vec<FilenameAssociationTrackInput>,
+) -> Result<FilenameAssociationBatchResult, String> {
+    let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
+        .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
+    let scanned_files = local_files::scan_audio_files(folder_path.as_str())?;
+
+    let mut used_file_paths: std::collections::HashSet<String> = db::list_playlist_linked_file_paths(
+        &state.db_path,
+        playlist_id,
+    )?
+    .into_iter()
+    .collect();
+
+    for track in tracks.iter() {
+        if let Some(local_file_path) = track.local_file_path.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            used_file_paths.insert(local_file_path.to_string());
+        }
+    }
+
+    let mut attempted = 0usize;
+    let mut matched = 0usize;
+
+    for track in tracks {
+        let permalink = track.permalink_url.trim();
+        let title = track.title.trim();
+        if permalink.is_empty() || title.is_empty() {
+            continue;
+        }
+
+        let already_associated = track
+            .local_file_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+        if already_associated {
+            continue;
+        }
+
+        attempted += 1;
+
+        let best_match = pick_best_match_for_track(
+            scanned_files.as_slice(),
+            &used_file_paths,
+            title,
+            track.artist.as_deref(),
+        );
+
+        let Some(best_file_path) = best_match else {
+            continue;
+        };
+
+        db::upsert_playlist_track_file_link_manual(
+            &state.db_path,
+            playlist_id,
+            permalink,
+            best_file_path.as_str(),
+        )?;
+
+        used_file_paths.insert(best_file_path);
+        matched += 1;
+    }
+
+    Ok(FilenameAssociationBatchResult { attempted, matched })
 }
 
 #[tauri::command]
@@ -937,7 +1193,8 @@ fn download_hypeddit_track_to_local_folder(
     let mut result: HypedditScriptResult = serde_json::from_str(json_payload.as_str())
         .map_err(|error| format!("Réponse download Hypeddit invalide: {error}"))?;
 
-    let rename_with_soundcloud_title = db::get_download_rename_with_soundcloud_title(&state.db_path)?;
+    let rename_with_soundcloud_title =
+        db::get_hypeddit_download_rename_with_soundcloud_title(&state.db_path)?;
     if rename_with_soundcloud_title {
         let downloaded_path = PathBuf::from(result.file_path.as_str());
         let extension = downloaded_path
@@ -987,7 +1244,7 @@ fn download_hypeddit_track_to_local_folder(
         result.file_name = converted_name;
     }
 
-    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
+    let embed_cover = db::get_hypeddit_download_embed_cover(&state.db_path)?;
     if embed_cover {
         if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             local_files::embed_cover_into_mp3(result.file_path.as_str(), artwork_url)?;
@@ -1086,7 +1343,7 @@ fn download_playlist_with_ytdl(
 
     let ytdlp_bin = resolve_ytdlp_binary()?;
     let target_file_type = db::get_ytdl_download_file_type(&state.db_path)?;
-    let embed_cover = db::get_download_embed_cover(&state.db_path)?;
+    let embed_cover = db::get_ytdl_download_embed_cover(&state.db_path)?;
     let _ = inspect_ytdlp_formats(ytdlp_bin.as_str(), track_permalink_url);
     let mut downloaded_file_path = download_track_with_ytdlp(
         ytdlp_bin.as_str(),
@@ -1097,7 +1354,8 @@ fn download_playlist_with_ytdl(
         embed_cover,
     )?;
 
-    let rename_with_soundcloud_title = db::get_download_rename_with_soundcloud_title(&state.db_path)?;
+    let rename_with_soundcloud_title =
+        db::get_ytdl_download_rename_with_soundcloud_title(&state.db_path)?;
     if rename_with_soundcloud_title {
         let downloaded_path = PathBuf::from(downloaded_file_path.as_str());
         let extension = downloaded_path
@@ -1753,8 +2011,12 @@ fn set_show_ytdl_playlist_download_button(state: State<AppState>, enabled: bool)
 fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
     Ok(MiscSettings {
         playlist_cover_mode: db::get_playlist_cover_mode(&state.db_path)?,
-        download_embed_cover: db::get_download_embed_cover(&state.db_path)?,
-        download_rename_with_soundcloud_title: db::get_download_rename_with_soundcloud_title(
+        hypeddit_download_embed_cover: db::get_hypeddit_download_embed_cover(&state.db_path)?,
+        hypeddit_download_rename_with_soundcloud_title: db::get_hypeddit_download_rename_with_soundcloud_title(
+            &state.db_path,
+        )?,
+        ytdl_download_embed_cover: db::get_ytdl_download_embed_cover(&state.db_path)?,
+        ytdl_download_rename_with_soundcloud_title: db::get_ytdl_download_rename_with_soundcloud_title(
             &state.db_path,
         )?,
         hypeddit_download_conversion_format: db::get_hypeddit_download_conversion_format(&state.db_path)?,
@@ -1775,16 +2037,29 @@ fn set_playlist_cover_mode(state: State<AppState>, mode: String) -> Result<(), S
 }
 
 #[tauri::command]
-fn set_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
-    db::set_download_embed_cover(&state.db_path, enabled)
+fn set_hypeddit_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_hypeddit_download_embed_cover(&state.db_path, enabled)
 }
 
 #[tauri::command]
-fn set_download_rename_with_soundcloud_title(
+fn set_hypeddit_download_rename_with_soundcloud_title(
     state: State<AppState>,
     enabled: bool,
 ) -> Result<(), String> {
-    db::set_download_rename_with_soundcloud_title(&state.db_path, enabled)
+    db::set_hypeddit_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_ytdl_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_ytdl_download_embed_cover(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_ytdl_download_rename_with_soundcloud_title(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_ytdl_download_rename_with_soundcloud_title(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -1868,6 +2143,8 @@ pub fn run() {
             scan_playlist_local_files,
             dissociate_playlist_local_folder,
             associate_playlist_track_local_file,
+            associate_playlist_track_local_file_by_filename,
+            associate_playlist_tracks_local_files_by_filename,
             dissociate_playlist_track_local_file,
             move_track_between_playlists,
             embed_local_mp3_cover,
@@ -1892,8 +2169,10 @@ pub fn run() {
             set_show_ytdl_playlist_download_button,
             get_misc_settings,
             set_playlist_cover_mode,
-            set_download_embed_cover,
-            set_download_rename_with_soundcloud_title,
+            set_hypeddit_download_embed_cover,
+            set_hypeddit_download_rename_with_soundcloud_title,
+            set_ytdl_download_embed_cover,
+            set_ytdl_download_rename_with_soundcloud_title,
             set_hypeddit_download_conversion_format,
             set_ytdl_download_file_type,
             set_analysis_auto_apply_frequency_max,

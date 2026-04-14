@@ -33,12 +33,6 @@ pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), St
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
 
-    let is_supported = extension == "mp3" || extension == "wav";
-
-    if !is_supported {
-        return Err("Cette action est disponible uniquement pour les fichiers MP3 et WAV".to_string());
-    }
-
     let cover_url = artwork_url.trim();
     if cover_url.is_empty() {
         return Err("URL de cover manquante".to_string());
@@ -73,6 +67,75 @@ pub fn embed_cover_into_mp3(file_path: &str, artwork_url: &str) -> Result<(), St
 
     if jpeg_bytes.is_empty() {
         return Err("Conversion cover JPEG vide".to_string());
+    }
+
+    if extension != "mp3" && extension != "wav" {
+        let source_stem = source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("audio");
+        let parent_dir = source
+            .parent()
+            .ok_or_else(|| "Dossier parent du fichier audio introuvable".to_string())?;
+
+        let temp_cover_path = parent_dir.join(format!("{source_stem}.glazer-cover.jpg"));
+        let temp_output_path = parent_dir.join(format!("{source_stem}.glazer-cover.{extension}"));
+
+        std::fs::write(&temp_cover_path, &jpeg_bytes)
+            .map_err(|error| format!("Impossible d'ecrire la cover temporaire: {error}"))?;
+
+        if temp_output_path.exists() {
+            let _ = std::fs::remove_file(&temp_output_path);
+        }
+
+        let mut command = Command::new("ffmpeg");
+        command
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-i")
+            .arg(source)
+            .arg("-i")
+            .arg(&temp_cover_path)
+            .arg("-map")
+            .arg("0")
+            .arg("-map")
+            .arg("1")
+            .arg("-c")
+            .arg("copy")
+            .arg("-disposition:v:0")
+            .arg("attached_pic")
+            .arg("-metadata:s:v")
+            .arg("title=Cover")
+            .arg("-metadata:s:v")
+            .arg("comment=Cover (front)");
+
+        if extension == "m4a" || extension == "mp4" {
+            command.arg("-movflags").arg("+faststart");
+        }
+
+        let status = command
+            .arg(&temp_output_path)
+            .status()
+            .map_err(|error| format!("Impossible de lancer ffmpeg pour la cover: {error}"))?;
+
+        let _ = std::fs::remove_file(&temp_cover_path);
+
+        if !status.success() {
+            let _ = std::fs::remove_file(&temp_output_path);
+            return Err(format!(
+                "Impossible d'integrer la cover pour ce format ({extension}) via ffmpeg."
+            ));
+        }
+
+        std::fs::remove_file(source)
+            .map_err(|error| format!("Impossible de remplacer le fichier audio source: {error}"))?;
+        std::fs::rename(&temp_output_path, source)
+            .map_err(|error| format!("Impossible de finaliser l'integration de cover: {error}"))?;
+
+        return Ok(());
     }
 
     let mut tag = id3::Tag::read_from_path(source).unwrap_or_default();

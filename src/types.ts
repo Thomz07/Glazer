@@ -103,8 +103,10 @@ export type YtDlDownloadFileType = "bestaudio" | "mp3" | "m4a" | "wav" | "flac";
 
 export type MiscSettings = {
   playlist_cover_mode: PlaylistCoverMode;
-  download_embed_cover?: boolean;
-  download_rename_with_soundcloud_title?: boolean;
+  hypeddit_download_embed_cover?: boolean;
+  hypeddit_download_rename_with_soundcloud_title?: boolean;
+  ytdl_download_embed_cover?: boolean;
+  ytdl_download_rename_with_soundcloud_title?: boolean;
   hypeddit_download_conversion_format?: HypedditConversionFormat;
   ytdl_download_file_type?: YtDlDownloadFileType;
   analysis_auto_apply_frequency_max?: boolean;
@@ -164,6 +166,11 @@ export type PlaylistGlobalAudioAnalysisResult = {
 export type MovePlaylistTrackResult = {
   moved_local_link: boolean;
   moved_local_file_path?: string | null;
+};
+
+export type FilenameAssociationBatchResult = {
+  attempted: number;
+  matched: number;
 };
 
 export type HypedditDownloadResult = {

@@ -23,6 +23,7 @@ import type {
   HypedditConversionFormat,
   HypedditDownloadProgressPayload,
   HypedditDownloadResult,
+  FilenameAssociationBatchResult,
   LocalAnalysisUpdateResult,
   LocalAudioFileInfo,
   LocalDownloadFilter,
@@ -56,6 +57,8 @@ const ASYNC_KEYS = [
   "loadingPlaylistFolder",
   "scanningLocalFiles",
   "associatingLocalFile",
+  "associatingLocalFileByName",
+  "associatingPlaylistLocalFilesByName",
   "dissociatingLocalFile",
   "embeddingLocalCover",
   "downloadingFromHypeddit",
@@ -105,8 +108,10 @@ function App() {
     show_ytdl_playlist_download_button: false,
   });
   const [playlistCoverMode, setPlaylistCoverMode] = useState<PlaylistCoverMode>("first");
-  const [downloadEmbedCover, setDownloadEmbedCover] = useState(false);
-  const [downloadRenameWithSoundcloudTitle, setDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [hypedditDownloadEmbedCover, setHypedditDownloadEmbedCover] = useState(false);
+  const [hypedditDownloadRenameWithSoundcloudTitle, setHypedditDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [ytdlDownloadEmbedCover, setYtDlDownloadEmbedCover] = useState(false);
+  const [ytdlDownloadRenameWithSoundcloudTitle, setYtDlDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadConversionFormat, setHypedditDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
   const [ytdlDownloadFileType, setYtDlDownloadFileType] = useState<YtDlDownloadFileType>("bestaudio");
   const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
@@ -612,8 +617,10 @@ function App() {
     try {
       const settings = await invoke<MiscSettings>("get_misc_settings");
       setPlaylistCoverMode(settings.playlist_cover_mode ?? "first");
-      setDownloadEmbedCover(Boolean(settings.download_embed_cover));
-      setDownloadRenameWithSoundcloudTitle(Boolean(settings.download_rename_with_soundcloud_title));
+      setHypedditDownloadEmbedCover(Boolean(settings.hypeddit_download_embed_cover));
+      setHypedditDownloadRenameWithSoundcloudTitle(Boolean(settings.hypeddit_download_rename_with_soundcloud_title));
+      setYtDlDownloadEmbedCover(Boolean(settings.ytdl_download_embed_cover));
+      setYtDlDownloadRenameWithSoundcloudTitle(Boolean(settings.ytdl_download_rename_with_soundcloud_title));
       setHypedditDownloadConversionFormat(settings.hypeddit_download_conversion_format ?? "original");
       setYtDlDownloadFileType(settings.ytdl_download_file_type ?? "bestaudio");
       setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
@@ -630,20 +637,40 @@ function App() {
     }
   }
 
-  async function saveDownloadEmbedCover(enabled: boolean) {
+  async function saveHypedditDownloadEmbedCover(enabled: boolean) {
     try {
-      await invoke("set_download_embed_cover", { enabled });
-      setDownloadEmbedCover(enabled);
+      await invoke("set_hypeddit_download_embed_cover", { enabled });
+      setHypedditDownloadEmbedCover(enabled);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
     }
   }
 
-  async function saveDownloadRenameWithSoundcloudTitle(enabled: boolean) {
+  async function saveHypedditDownloadRenameWithSoundcloudTitle(enabled: boolean) {
     try {
-      await invoke("set_download_rename_with_soundcloud_title", { enabled });
-      setDownloadRenameWithSoundcloudTitle(enabled);
+      await invoke("set_hypeddit_download_rename_with_soundcloud_title", { enabled });
+      setHypedditDownloadRenameWithSoundcloudTitle(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveYtDlDownloadEmbedCover(enabled: boolean) {
+    try {
+      await invoke("set_ytdl_download_embed_cover", { enabled });
+      setYtDlDownloadEmbedCover(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveYtDlDownloadRenameWithSoundcloudTitle(enabled: boolean) {
+    try {
+      await invoke("set_ytdl_download_rename_with_soundcloud_title", { enabled });
+      setYtDlDownloadRenameWithSoundcloudTitle(enabled);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -1127,6 +1154,96 @@ function App() {
       setStatus(`${t("localAssociateError")}: ${String(error)}`);
     } finally {
       setAsyncState("associatingLocalFile", false);
+    }
+  }
+
+  async function associateSelectedTrackByFilename() {
+    if (!selectedPlaylistDetails || !selectedTrackInfo) {
+      return;
+    }
+
+    if (!selectedTrackInfo.permalink_url) {
+      setStatus(t("localAssociateTrackMissingUrl"));
+      return;
+    }
+
+    if (!hasAvailableLocalFolder) {
+      setStatus(t("hypedditDownloadMissingFolder"));
+      return;
+    }
+
+    try {
+      setAsyncState("associatingLocalFileByName", true);
+      const matched = await invoke<boolean>("associate_playlist_track_local_file_by_filename", {
+        playlistId: selectedPlaylistDetails.id,
+        trackPermalinkUrl: selectedTrackInfo.permalink_url,
+        trackTitle: selectedTrackInfo.title,
+        trackArtist: selectedTrackInfo.artist ?? null,
+      });
+
+      if (!matched) {
+        setStatus(t("localAssociateByNameNoMatch"));
+        return;
+      }
+
+      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+        playlistId: selectedPlaylistDetails.id,
+      });
+      setSelectedPlaylistDetailsWithCache(details);
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
+          return null;
+        }
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+      });
+
+      setStatus(t("localAssociateByNameDone"));
+    } catch (error) {
+      setStatus(`${t("localAssociateByNameError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("associatingLocalFileByName", false);
+    }
+  }
+
+  async function associatePlaylistTracksByFilename() {
+    if (!selectedPlaylistDetails || !hasAvailableLocalFolder) {
+      return;
+    }
+
+    try {
+      setAsyncState("associatingPlaylistLocalFilesByName", true);
+      const result = await invoke<FilenameAssociationBatchResult>(
+        "associate_playlist_tracks_local_files_by_filename",
+        {
+          playlistId: selectedPlaylistDetails.id,
+          tracks: selectedPlaylistDetails.tracks.map((track) => ({
+            permalink_url: track.permalink_url ?? "",
+            title: track.title,
+            artist: track.artist ?? null,
+            local_file_path: track.local_file?.file_path ?? null,
+          })),
+        },
+      );
+
+      const details = await invoke<PlaylistDetails>("get_playlist_details", {
+        playlistId: selectedPlaylistDetails.id,
+      });
+      setSelectedPlaylistDetailsWithCache(details);
+      setSelectedTrackId((currentId) => {
+        if (currentId === null) {
+          return null;
+        }
+        return details.tracks.some((track) => track.id === currentId) ? currentId : null;
+      });
+
+      setStatus(
+        `${t("localAssociatePlaylistByNameDonePrefix")} ${formatCount(result.matched)} / ${formatCount(result.attempted)}`,
+      );
+      setIsActionsMenuOpen(false);
+    } catch (error) {
+      setStatus(`${t("localAssociatePlaylistByNameError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("associatingPlaylistLocalFilesByName", false);
     }
   }
 
@@ -2240,6 +2357,7 @@ function App() {
                 refreshingPlaylistDetails={asyncState.refreshingPlaylistDetails}
                 runningGlobalAudioAnalysis={asyncState.runningGlobalAudioAnalysis}
                 runningPlaylistYtDlDownload={asyncState.downloadingPlaylistFromYtDl}
+                runningPlaylistFilenameAssociation={asyncState.associatingPlaylistLocalFilesByName}
                 confirmGlobalAudioAnalysis={confirmGlobalAudioAnalysis}
                 overwriteExistingGlobalAnalysis={overwriteExistingGlobalAnalysis}
                 hasAvailableLocalFolder={hasAvailableLocalFolder}
@@ -2289,6 +2407,11 @@ function App() {
                 }}
                 onStartConfirmGlobalAudioAnalysis={() => setConfirmGlobalAudioAnalysis(true)}
                 onOpenYtDlPlaylistModal={openYtDlPlaylistModalFromActions}
+                onAssociatePlaylistTracksByFilename={() => {
+                  associatePlaylistTracksByFilename().catch((error) => {
+                    setStatus(`${t("localAssociatePlaylistByNameError")}: ${String(error)}`);
+                  });
+                }}
                 onSetOverwriteExistingGlobalAnalysis={(value) => setOverwriteExistingGlobalAnalysis(value)}
                 onConfirmAndRunGlobalPlaylistAudioAnalysis={() => {
                   confirmAndRunGlobalPlaylistAudioAnalysis().catch((error) => {
@@ -2321,15 +2444,27 @@ function App() {
                   canRunYtDlDownload={canRunYtDlDownload}
                   overwriteExistingHypedditDownload={overwriteExistingHypedditDownload}
                   setOverwriteExistingHypedditDownload={setOverwriteExistingHypedditDownload}
-                  downloadEmbedCover={downloadEmbedCover}
-                  downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
-                  onSaveDownloadEmbedCover={(enabled) => {
-                    saveDownloadEmbedCover(enabled).catch((error) => {
+                  hypedditDownloadEmbedCover={hypedditDownloadEmbedCover}
+                  hypedditDownloadRenameWithSoundcloudTitle={hypedditDownloadRenameWithSoundcloudTitle}
+                  ytdlDownloadEmbedCover={ytdlDownloadEmbedCover}
+                  ytdlDownloadRenameWithSoundcloudTitle={ytdlDownloadRenameWithSoundcloudTitle}
+                  onSaveHypedditDownloadEmbedCover={(enabled) => {
+                    saveHypedditDownloadEmbedCover(enabled).catch((error) => {
                       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
                     });
                   }}
-                  onSaveDownloadRenameWithSoundcloudTitle={(enabled) => {
-                    saveDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                  onSaveHypedditDownloadRenameWithSoundcloudTitle={(enabled) => {
+                    saveHypedditDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+                    });
+                  }}
+                  onSaveYtDlDownloadEmbedCover={(enabled) => {
+                    saveYtDlDownloadEmbedCover(enabled).catch((error) => {
+                      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+                    });
+                  }}
+                  onSaveYtDlDownloadRenameWithSoundcloudTitle={(enabled) => {
+                    saveYtDlDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
                       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
                     });
                   }}
@@ -2339,6 +2474,7 @@ function App() {
                   setTargetPlaylistIdForMove={(value) => setTargetPlaylistIdForMove(value)}
                   movingTrackBetweenPlaylists={asyncState.movingTrackBetweenPlaylists}
                   associatingLocalFile={asyncState.associatingLocalFile}
+                  associatingLocalFileByName={asyncState.associatingLocalFileByName}
                   embeddingLocalCover={asyncState.embeddingLocalCover}
                   exportingSpectrogram={asyncState.exportingSpectrogram}
                   dissociatingLocalFile={asyncState.dissociatingLocalFile}
@@ -2392,6 +2528,11 @@ function App() {
                   onAssociateLocalFile={() => {
                     associateLocalFileToSelectedTrack().catch((error) => {
                       setStatus(`${t("localAssociateError")}: ${String(error)}`);
+                    });
+                  }}
+                  onAssociateLocalFileByName={() => {
+                    associateSelectedTrackByFilename().catch((error) => {
+                      setStatus(`${t("localAssociateByNameError")}: ${String(error)}`);
                     });
                   }}
                   onPrepareHypedditDownloadModal={() => prepareHypedditDownloadModal()}
@@ -2461,8 +2602,10 @@ function App() {
             savingPlaylistCoverMode={asyncState.savingPlaylistCoverMode}
             spectrogramAnalysisScope={spectrogramAnalysisScope}
             analysisAutoApplyFrequencyMax={analysisAutoApplyFrequencyMax}
-            downloadEmbedCover={downloadEmbedCover}
-            downloadRenameWithSoundcloudTitle={downloadRenameWithSoundcloudTitle}
+            hypedditDownloadEmbedCover={hypedditDownloadEmbedCover}
+            hypedditDownloadRenameWithSoundcloudTitle={hypedditDownloadRenameWithSoundcloudTitle}
+            ytdlDownloadEmbedCover={ytdlDownloadEmbedCover}
+            ytdlDownloadRenameWithSoundcloudTitle={ytdlDownloadRenameWithSoundcloudTitle}
             hypedditDownloadConversionFormat={hypedditDownloadConversionFormat}
             ytdlDownloadFileType={ytdlDownloadFileType}
             hypedditDownloadStartTimeoutSeconds={hypedditDownloadStartTimeoutSeconds}
@@ -2496,13 +2639,23 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
-            onSaveDownloadEmbedCover={(enabled) => {
-              saveDownloadEmbedCover(enabled).catch((error) => {
+            onSaveHypedditDownloadEmbedCover={(enabled) => {
+              saveHypedditDownloadEmbedCover(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
-            onSaveDownloadRenameWithSoundcloudTitle={(enabled) => {
-              saveDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+            onSaveHypedditDownloadRenameWithSoundcloudTitle={(enabled) => {
+              saveHypedditDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveYtDlDownloadEmbedCover={(enabled) => {
+              saveYtDlDownloadEmbedCover(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveYtDlDownloadRenameWithSoundcloudTitle={(enabled) => {
+              saveYtDlDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
@@ -2646,9 +2799,9 @@ function App() {
         <label className="setting-toggle actions-option">
           <input
             type="checkbox"
-            checked={downloadRenameWithSoundcloudTitle}
+              checked={ytdlDownloadRenameWithSoundcloudTitle}
             onChange={(event) => {
-              saveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked).catch((error) => {
+              saveYtDlDownloadRenameWithSoundcloudTitle(event.currentTarget.checked).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
@@ -2660,9 +2813,9 @@ function App() {
         <label className="setting-toggle actions-option">
           <input
             type="checkbox"
-            checked={downloadEmbedCover}
+              checked={ytdlDownloadEmbedCover}
             onChange={(event) => {
-              saveDownloadEmbedCover(event.currentTarget.checked).catch((error) => {
+              saveYtDlDownloadEmbedCover(event.currentTarget.checked).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}

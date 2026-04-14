@@ -19,8 +19,10 @@ type SettingsViewProps = {
   savingPlaylistCoverMode: boolean;
   spectrogramAnalysisScope: SpectrogramAnalysisScope;
   analysisAutoApplyFrequencyMax: boolean;
-  downloadEmbedCover: boolean;
-  downloadRenameWithSoundcloudTitle: boolean;
+  hypedditDownloadEmbedCover: boolean;
+  hypedditDownloadRenameWithSoundcloudTitle: boolean;
+  ytdlDownloadEmbedCover: boolean;
+  ytdlDownloadRenameWithSoundcloudTitle: boolean;
   hypedditDownloadConversionFormat: HypedditConversionFormat;
   ytdlDownloadFileType: YtDlDownloadFileType;
   hypedditDownloadStartTimeoutSeconds: number;
@@ -46,8 +48,10 @@ type SettingsViewProps = {
   onSavePlaylistCoverMode: (mode: PlaylistCoverMode) => void;
   onSpectrogramAnalysisScopeChange: (scope: SpectrogramAnalysisScope) => void;
   onSaveAnalysisAutoApplyFrequencyMax: (enabled: boolean) => void;
-  onSaveDownloadEmbedCover: (enabled: boolean) => void;
-  onSaveDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveHypedditDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveHypedditDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveYtDlDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveYtDlDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
   onSaveYtDlDownloadFileType: (fileType: YtDlDownloadFileType) => void;
   setHypedditDownloadStartTimeoutSeconds: (value: number) => void;
@@ -77,8 +81,10 @@ export function SettingsView({
   savingPlaylistCoverMode,
   spectrogramAnalysisScope,
   analysisAutoApplyFrequencyMax,
-  downloadEmbedCover,
-  downloadRenameWithSoundcloudTitle,
+  hypedditDownloadEmbedCover,
+  hypedditDownloadRenameWithSoundcloudTitle,
+  ytdlDownloadEmbedCover,
+  ytdlDownloadRenameWithSoundcloudTitle,
   hypedditDownloadConversionFormat,
   ytdlDownloadFileType,
   hypedditDownloadStartTimeoutSeconds,
@@ -104,8 +110,10 @@ export function SettingsView({
   onSavePlaylistCoverMode,
   onSpectrogramAnalysisScopeChange,
   onSaveAnalysisAutoApplyFrequencyMax,
-  onSaveDownloadEmbedCover,
-  onSaveDownloadRenameWithSoundcloudTitle,
+  onSaveHypedditDownloadEmbedCover,
+  onSaveHypedditDownloadRenameWithSoundcloudTitle,
+  onSaveYtDlDownloadEmbedCover,
+  onSaveYtDlDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadConversionFormat,
   onSaveYtDlDownloadFileType,
   setHypedditDownloadStartTimeoutSeconds,
@@ -221,19 +229,19 @@ export function SettingsView({
           <label className="setting-toggle auth-actions">
             <input
               type="checkbox"
-              checked={downloadEmbedCover}
-              onChange={(event) => onSaveDownloadEmbedCover(event.currentTarget.checked)}
+              checked={hypedditDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveHypedditDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
             />
-            <span>{t("downloadEmbedCoverSetting")}</span>
+            <span>{t("downloadRenameSetting")}</span>
           </label>
 
           <label className="setting-toggle auth-actions">
             <input
               type="checkbox"
-              checked={downloadRenameWithSoundcloudTitle}
-              onChange={(event) => onSaveDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              checked={hypedditDownloadEmbedCover}
+              onChange={(event) => onSaveHypedditDownloadEmbedCover(event.currentTarget.checked)}
             />
-            <span>{t("downloadRenameSetting")}</span>
+            <span>{t("downloadEmbedCoverSetting")}</span>
           </label>
 
           <label className="setting-toggle auth-actions">
@@ -337,6 +345,24 @@ export function SettingsView({
         <section className="settings-card">
           <h3>{t("ytdlDownloadSettingsTitle")}</h3>
           <p className="connection-hint">{t("ytdlDownloadQualityWarning")}</p>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={ytdlDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveYtDlDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={ytdlDownloadEmbedCover}
+              onChange={(event) => onSaveYtDlDownloadEmbedCover(event.currentTarget.checked)}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
 
           <label className="setting-toggle auth-actions">
             <input

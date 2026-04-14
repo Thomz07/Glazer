@@ -21,6 +21,7 @@ type PlaylistDetailsProps = {
   refreshingPlaylistDetails: boolean;
   runningGlobalAudioAnalysis: boolean;
   runningPlaylistYtDlDownload: boolean;
+  runningPlaylistFilenameAssociation: boolean;
   confirmGlobalAudioAnalysis: boolean;
   overwriteExistingGlobalAnalysis: boolean;
   hasAvailableLocalFolder: boolean;
@@ -52,6 +53,7 @@ type PlaylistDetailsProps = {
   onRefreshSelectedPlaylistDetails: () => void;
   onStartConfirmGlobalAudioAnalysis: () => void;
   onOpenYtDlPlaylistModal: () => void;
+  onAssociatePlaylistTracksByFilename: () => void;
   onSetOverwriteExistingGlobalAnalysis: (value: boolean) => void;
   onConfirmAndRunGlobalPlaylistAudioAnalysis: () => void;
   onCancelGlobalAudioAnalysis: () => void;
@@ -74,6 +76,7 @@ export function PlaylistDetailsView({
   refreshingPlaylistDetails,
   runningGlobalAudioAnalysis,
   runningPlaylistYtDlDownload,
+  runningPlaylistFilenameAssociation,
   confirmGlobalAudioAnalysis,
   overwriteExistingGlobalAnalysis,
   hasAvailableLocalFolder,
@@ -105,6 +108,7 @@ export function PlaylistDetailsView({
   onRefreshSelectedPlaylistDetails,
   onStartConfirmGlobalAudioAnalysis,
   onOpenYtDlPlaylistModal,
+  onAssociatePlaylistTracksByFilename,
   onSetOverwriteExistingGlobalAnalysis,
   onConfirmAndRunGlobalPlaylistAudioAnalysis,
   onCancelGlobalAudioAnalysis,
@@ -277,11 +281,23 @@ export function PlaylistDetailsView({
                   type="button"
                   className="filter-reset"
                   onClick={onOpenYtDlPlaylistModal}
-                  disabled={runningGlobalAudioAnalysis || runningPlaylistYtDlDownload || missingYtDlTracksCount === 0}
+                  disabled={runningGlobalAudioAnalysis || runningPlaylistYtDlDownload || runningPlaylistFilenameAssociation || missingYtDlTracksCount === 0}
                 >
                   {runningPlaylistYtDlDownload
                     ? t("ytdlPlaylistRunning")
                     : `${t("ytdlPlaylistMissingAction")} (${formatCount(missingYtDlTracksCount)})`}
+                </button>
+              ) : null}
+              {hasAvailableLocalFolder && !confirmGlobalAudioAnalysis ? (
+                <button
+                  type="button"
+                  className="filter-reset"
+                  onClick={onAssociatePlaylistTracksByFilename}
+                  disabled={runningGlobalAudioAnalysis || runningPlaylistYtDlDownload || runningPlaylistFilenameAssociation}
+                >
+                  {runningPlaylistFilenameAssociation
+                    ? t("localAssociatePlaylistByNameRunning")
+                    : t("localAssociatePlaylistByNameAction")}
                 </button>
               ) : null}
               {hasAvailableLocalFolder && confirmGlobalAudioAnalysis ? (
