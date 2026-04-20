@@ -12,6 +12,7 @@ type TrackPanelProps = {
   selectedTrackInfo: PlaylistTrack;
   hasAvailableLocalFolder: boolean;
   canDownloadSelectedTrackFromHypeddit: boolean;
+  canDownloadSelectedTrackFromBandcamp: boolean;
   hypedditDownloadButtonKey: TranslationKey;
   hypedditDownloadModalTitleKey: TranslationKey;
   canRunYtDlDownload: boolean;
@@ -21,10 +22,14 @@ type TrackPanelProps = {
   hypedditDownloadRenameWithSoundcloudTitle: boolean;
   ytdlDownloadEmbedCover: boolean;
   ytdlDownloadRenameWithSoundcloudTitle: boolean;
+  bandcampDownloadEmbedCover: boolean;
+  bandcampDownloadRenameWithSoundcloudTitle: boolean;
   onSaveHypedditDownloadEmbedCover: (enabled: boolean) => void;
   onSaveHypedditDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveYtDlDownloadEmbedCover: (enabled: boolean) => void;
   onSaveYtDlDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveBandcampDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveBandcampDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   hypedditDownloadPhase: string;
   availableMoveTargetPlaylists: Playlist[];
   targetPlaylistIdForMove: number | "";
@@ -36,6 +41,7 @@ type TrackPanelProps = {
   associatingLocalFile: boolean;
   associatingLocalFileByName: boolean;
   downloadingFromHypeddit: boolean;
+  downloadingFromBandcamp: boolean;
   downloadingFromYtDl: boolean;
   downloadingCover: boolean;
   loadingSpectrogramPreview: boolean;
@@ -52,8 +58,10 @@ type TrackPanelProps = {
   onAssociateLocalFile: () => void;
   onAssociateLocalFileByName: () => void;
   onPrepareHypedditDownloadModal: () => Promise<boolean>;
+  onPrepareBandcampDownloadModal: () => Promise<boolean>;
   onPrepareYtDlDownloadModal: () => Promise<boolean>;
   onDownloadFromHypeddit: () => void;
+  onDownloadFromBandcamp: () => void;
   onRunYtDlDownload: () => void;
   onDownloadCover: () => void;
   onMoveTrack: () => void;
@@ -78,6 +86,7 @@ export function TrackPanel({
   selectedTrackInfo,
   hasAvailableLocalFolder,
   canDownloadSelectedTrackFromHypeddit,
+  canDownloadSelectedTrackFromBandcamp,
   hypedditDownloadButtonKey,
   hypedditDownloadModalTitleKey,
   canRunYtDlDownload,
@@ -87,10 +96,14 @@ export function TrackPanel({
   hypedditDownloadRenameWithSoundcloudTitle,
   ytdlDownloadEmbedCover,
   ytdlDownloadRenameWithSoundcloudTitle,
+  bandcampDownloadEmbedCover,
+  bandcampDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadEmbedCover,
   onSaveHypedditDownloadRenameWithSoundcloudTitle,
   onSaveYtDlDownloadEmbedCover,
   onSaveYtDlDownloadRenameWithSoundcloudTitle,
+  onSaveBandcampDownloadEmbedCover,
+  onSaveBandcampDownloadRenameWithSoundcloudTitle,
   hypedditDownloadPhase,
   availableMoveTargetPlaylists,
   targetPlaylistIdForMove,
@@ -102,6 +115,7 @@ export function TrackPanel({
   associatingLocalFile,
   associatingLocalFileByName,
   downloadingFromHypeddit,
+  downloadingFromBandcamp,
   downloadingFromYtDl,
   downloadingCover,
   loadingSpectrogramPreview,
@@ -118,8 +132,10 @@ export function TrackPanel({
   onAssociateLocalFile,
   onAssociateLocalFileByName,
   onPrepareHypedditDownloadModal,
+  onPrepareBandcampDownloadModal,
   onPrepareYtDlDownloadModal,
   onDownloadFromHypeddit,
+  onDownloadFromBandcamp,
   onRunYtDlDownload,
   onDownloadCover,
   onMoveTrack,
@@ -146,6 +162,10 @@ export function TrackPanel({
   const [showYtDlOverwriteOption, setShowYtDlOverwriteOption] = useState(false);
   const [ytDlModalShouldAutoClose, setYtDlModalShouldAutoClose] = useState(false);
   const [ytDlDownloadStarted, setYtDlDownloadStarted] = useState(false);
+  const [showBandcampDownloadModal, setShowBandcampDownloadModal] = useState(false);
+  const [showBandcampOverwriteOption, setShowBandcampOverwriteOption] = useState(false);
+  const [bandcampModalShouldAutoClose, setBandcampModalShouldAutoClose] = useState(false);
+  const [bandcampDownloadStarted, setBandcampDownloadStarted] = useState(false);
   const [showMoveTrackModal, setShowMoveTrackModal] = useState(false);
 
   useEffect(() => {
@@ -180,6 +200,35 @@ export function TrackPanel({
     hypedditModalShouldAutoClose,
     hypedditDownloadStarted,
     downloadingFromHypeddit,
+    setOverwriteExistingHypedditDownload,
+  ]);
+
+  useEffect(() => {
+    if (!showBandcampDownloadModal || !bandcampModalShouldAutoClose) {
+      return;
+    }
+
+    if (downloadingFromBandcamp) {
+      if (!bandcampDownloadStarted) {
+        setBandcampDownloadStarted(true);
+      }
+      return;
+    }
+
+    if (!bandcampDownloadStarted) {
+      return;
+    }
+
+    setShowBandcampDownloadModal(false);
+    setShowBandcampOverwriteOption(false);
+    setOverwriteExistingHypedditDownload(false);
+    setBandcampModalShouldAutoClose(false);
+    setBandcampDownloadStarted(false);
+  }, [
+    showBandcampDownloadModal,
+    bandcampModalShouldAutoClose,
+    bandcampDownloadStarted,
+    downloadingFromBandcamp,
     setOverwriteExistingHypedditDownload,
   ]);
 
@@ -248,6 +297,22 @@ export function TrackPanel({
     setShowYtDlDownloadModal(true);
   }
 
+  function closeBandcampDownloadModal() {
+    setShowBandcampDownloadModal(false);
+    setShowBandcampOverwriteOption(false);
+    setBandcampModalShouldAutoClose(false);
+    setBandcampDownloadStarted(false);
+    if (!downloadingFromBandcamp) {
+      setOverwriteExistingHypedditDownload(false);
+    }
+  }
+
+  async function openBandcampDownloadModal() {
+    const shouldShowOverwrite = await onPrepareBandcampDownloadModal();
+    setShowBandcampOverwriteOption(shouldShowOverwrite);
+    setShowBandcampDownloadModal(true);
+  }
+
   return (
     <aside className="track-panel open">
       <div className="track-panel-content">
@@ -290,6 +355,18 @@ export function TrackPanel({
                 disabled={downloadingFromHypeddit}
               >
                 {downloadingFromHypeddit ? t("hypedditDownloadRunning") : t(hypedditDownloadButtonKey)}
+              </button>
+            ) : null}
+
+            {canDownloadSelectedTrackFromBandcamp ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void openBandcampDownloadModal();
+                }}
+                disabled={downloadingFromBandcamp}
+              >
+                {downloadingFromBandcamp ? t("bandcampDownloadRunning") : t("bandcampDownloadButton")}
               </button>
             ) : null}
 
@@ -424,6 +501,74 @@ export function TrackPanel({
           ) : null}
 
           {downloadingFromHypeddit ? <p className="status">{getHypedditProgressLabel(hypedditDownloadPhase)}</p> : null}
+        </CenteredModal>
+
+        <CenteredModal
+          open={showBandcampDownloadModal}
+          title={t("bandcampDownloadModalTitle")}
+          closeLabel={t("close")}
+          onClose={closeBandcampDownloadModal}
+          showCloseButton={false}
+          actions={(
+            <>
+              <button
+                type="button"
+                onClick={closeBandcampDownloadModal}
+                disabled={downloadingFromBandcamp}
+              >
+                {t("globalAudioAnalysisCancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBandcampModalShouldAutoClose(true);
+                  onDownloadFromBandcamp();
+                }}
+                disabled={!canDownloadSelectedTrackFromBandcamp || downloadingFromBandcamp}
+              >
+                {downloadingFromBandcamp ? t("bandcampDownloadRunning") : t("hypedditDownloadConfirm")}
+              </button>
+            </>
+          )}
+        >
+          <p className="centered-modal-note">{t("bandcampDownloadModalDescription")}</p>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={bandcampDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveBandcampDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+              disabled={downloadingFromBandcamp}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle actions-option">
+            <input
+              type="checkbox"
+              checked={bandcampDownloadEmbedCover}
+              onChange={(event) => onSaveBandcampDownloadEmbedCover(event.currentTarget.checked)}
+              disabled={downloadingFromBandcamp}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          {showBandcampOverwriteOption ? (
+            <>
+              <p className="centered-modal-warning">{t("bandcampDownloadModalExistingFileWarning")}</p>
+              <label className="setting-toggle actions-option">
+                <input
+                  type="checkbox"
+                  checked={overwriteExistingHypedditDownload}
+                  onChange={(event) => setOverwriteExistingHypedditDownload(event.currentTarget.checked)}
+                  disabled={downloadingFromBandcamp}
+                />
+                <span>{t("hypedditDownloadOverwriteLabel")}</span>
+              </label>
+            </>
+          ) : null}
+
+          {downloadingFromBandcamp ? <p className="status">{t("bandcampDownloadRunning")}</p> : null}
         </CenteredModal>
 
         <CenteredModal

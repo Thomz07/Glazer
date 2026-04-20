@@ -17,6 +17,7 @@ import { useUnicodeSpinner } from "./hooks/useUnicodeSpinner";
 import type {
   AudioQualityFilter,
   AuthStartPayload,
+  BandcampDownloadFormat,
   CoverQuality,
   DebugSettings,
   DownloadSourceFilter,
@@ -63,6 +64,7 @@ const ASYNC_KEYS = [
   "dissociatingLocalFile",
   "embeddingLocalCover",
   "downloadingFromHypeddit",
+  "downloadingFromBandcamp",
   "downloadingFromYtDl",
   "downloadingCover",
   "exportingSpectrogram",
@@ -115,9 +117,15 @@ function App() {
   const [soundcloudDownloadRenameWithSoundcloudTitle, setSoundcloudDownloadRenameWithSoundcloudTitle] = useState(false);
   const [ytdlDownloadEmbedCover, setYtDlDownloadEmbedCover] = useState(false);
   const [ytdlDownloadRenameWithSoundcloudTitle, setYtDlDownloadRenameWithSoundcloudTitle] = useState(false);
+  const [bandcampDownloadEmbedCover, setBandcampDownloadEmbedCover] = useState(false);
+  const [bandcampDownloadRenameWithSoundcloudTitle, setBandcampDownloadRenameWithSoundcloudTitle] = useState(false);
   const [hypedditDownloadConversionFormat, setHypedditDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
   const [soundcloudDownloadConversionFormat, setSoundcloudDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
+  const [bandcampDownloadConversionFormat, setBandcampDownloadConversionFormat] = useState<HypedditConversionFormat>("original");
   const [ytdlDownloadFileType, setYtDlDownloadFileType] = useState<YtDlDownloadFileType>("bestaudio");
+  const [bandcampDownloadPreferredFormat, setBandcampDownloadPreferredFormat] = useState<BandcampDownloadFormat>("mp3-320");
+  const [bandcampEmailTimeoutSeconds, setBandcampEmailTimeoutSeconds] = useState(60);
+  const [bandcampDownloadFallbackToStream, setBandcampDownloadFallbackToStream] = useState(true);
   const [playlistDownloadPriorityOrder, setPlaylistDownloadPriorityOrder] =
     useState<PlaylistDownloadPriorityOrder>("hypeddit_soundcloud_ytdl");
   const [analysisAutoApplyFrequencyMax, setAnalysisAutoApplyFrequencyMax] = useState(true);
@@ -630,9 +638,17 @@ function App() {
       setSoundcloudDownloadRenameWithSoundcloudTitle(Boolean(settings.soundcloud_download_rename_with_soundcloud_title));
       setYtDlDownloadEmbedCover(Boolean(settings.ytdl_download_embed_cover));
       setYtDlDownloadRenameWithSoundcloudTitle(Boolean(settings.ytdl_download_rename_with_soundcloud_title));
+      setBandcampDownloadEmbedCover(Boolean(settings.bandcamp_download_embed_cover));
+      setBandcampDownloadRenameWithSoundcloudTitle(Boolean(settings.bandcamp_download_rename_with_soundcloud_title));
       setHypedditDownloadConversionFormat(settings.hypeddit_download_conversion_format ?? "original");
       setSoundcloudDownloadConversionFormat(settings.soundcloud_download_conversion_format ?? "original");
+      setBandcampDownloadConversionFormat(settings.bandcamp_download_conversion_format ?? "original");
       setYtDlDownloadFileType(settings.ytdl_download_file_type ?? "bestaudio");
+      setBandcampDownloadPreferredFormat(settings.bandcamp_download_preferred_format ?? "mp3-320");
+      setBandcampEmailTimeoutSeconds(
+        Math.min(180, Math.max(15, Math.round(settings.bandcamp_email_timeout_seconds ?? 60))),
+      );
+      setBandcampDownloadFallbackToStream(settings.bandcamp_download_fallback_to_stream ?? true);
       setPlaylistDownloadPriorityOrder(settings.playlist_download_priority_order ?? "hypeddit_soundcloud_ytdl");
       setAnalysisAutoApplyFrequencyMax(settings.analysis_auto_apply_frequency_max ?? true);
       setHypedditDownloadHeadless(settings.hypeddit_download_headless ?? true);
@@ -691,6 +707,26 @@ function App() {
     }
   }
 
+  async function saveBandcampDownloadEmbedCover(enabled: boolean) {
+    try {
+      await invoke("set_bandcamp_download_embed_cover", { enabled });
+      setBandcampDownloadEmbedCover(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveBandcampDownloadRenameWithSoundcloudTitle(enabled: boolean) {
+    try {
+      await invoke("set_bandcamp_download_rename_with_soundcloud_title", { enabled });
+      setBandcampDownloadRenameWithSoundcloudTitle(enabled);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
   async function saveSoundcloudDownloadEmbedCover(enabled: boolean) {
     try {
       await invoke("set_soundcloud_download_embed_cover", { enabled });
@@ -735,6 +771,50 @@ function App() {
     try {
       await invoke("set_soundcloud_download_conversion_format", { format });
       setSoundcloudDownloadConversionFormat(format);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveBandcampDownloadConversionFormat(format: HypedditConversionFormat) {
+    try {
+      await invoke("set_bandcamp_download_conversion_format", { format });
+      setBandcampDownloadConversionFormat(format);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveBandcampDownloadPreferredFormat(format: BandcampDownloadFormat) {
+    try {
+      await invoke("set_bandcamp_download_preferred_format", { format });
+      setBandcampDownloadPreferredFormat(format);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveBandcampEmailTimeoutSeconds(seconds: number) {
+    const normalized = Number.isFinite(seconds)
+      ? Math.min(180, Math.max(15, Math.round(seconds)))
+      : 60;
+
+    try {
+      await invoke("set_bandcamp_email_timeout_seconds", { seconds: normalized });
+      setBandcampEmailTimeoutSeconds(normalized);
+      setStatus(t("statusDownloadSettingsSaved"));
+    } catch (error) {
+      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+    }
+  }
+
+  async function saveBandcampDownloadFallbackToStream(enabled: boolean) {
+    try {
+      await invoke("set_bandcamp_download_fallback_to_stream", { enabled });
+      setBandcampDownloadFallbackToStream(enabled);
       setStatus(t("statusDownloadSettingsSaved"));
     } catch (error) {
       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -1694,6 +1774,83 @@ function App() {
     }
   }
 
+  async function downloadSelectedTrackFromBandcamp() {
+    if (!selectedPlaylistDetails || !selectedTrackInfo) {
+      return;
+    }
+
+    const associatedUrl = selectedTrackInfo.associated_url?.trim();
+    if (!associatedUrl || getAssociatedSource(associatedUrl) !== "bandcamp") {
+      setStatus(t("bandcampDownloadMissingLink"));
+      return;
+    }
+
+    if (!selectedTrackInfo.permalink_url) {
+      setStatus(t("localAssociateTrackMissingUrl"));
+      return;
+    }
+
+    if (!hasAvailableLocalFolder) {
+      setStatus(t("bandcampDownloadMissingFolder"));
+      return;
+    }
+
+    try {
+      setAsyncState("downloadingFromBandcamp", true);
+      const result = await invoke<HypedditDownloadResult>("download_bandcamp_track_to_local_folder", {
+        playlistId: selectedPlaylistDetails.id,
+        trackPermalinkUrl: selectedTrackInfo.permalink_url,
+        trackTitle: selectedTrackInfo.title,
+        bandcampUrl: associatedUrl,
+        artworkUrl: resolvePanelArtworkUrl(selectedTrackInfo.artwork_url) ?? selectedTrackInfo.artwork_url ?? null,
+        overwriteExisting: overwriteExistingHypedditDownload,
+        existingFilePath: selectedTrackInfo.local_file?.file_path ?? null,
+      });
+
+      const downloadedLocalFile: LocalAudioFileInfo = {
+        file_path: result.file_path,
+        file_name: result.file_name,
+        matched_soundcloud_url: selectedTrackInfo.permalink_url,
+      };
+
+      const hydratedLocalFile = await getHydratedLocalFileWithRetry(
+        selectedPlaylistDetails.id,
+        selectedTrackInfo.permalink_url,
+      );
+
+      const localFileForUi = hydratedLocalFile ?? downloadedLocalFile;
+
+      updateSelectedPlaylistDetailsWithCache((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          tracks: current.tracks.map((track) =>
+            track.id === selectedTrackInfo.id
+              ? {
+                  ...track,
+                  local_file: localFileForUi,
+                }
+              : track,
+          ),
+        };
+      });
+
+      setOverwriteExistingHypedditDownload(false);
+      setStatus(
+        result.overwrote_existing
+          ? `${t("bandcampDownloadDoneOverwrite")}: ${result.file_path}`
+          : `${t("bandcampDownloadDone")}: ${result.file_path}`,
+      );
+    } catch (error) {
+      setStatus(`${t("bandcampDownloadError")}: ${String(error)}`);
+    } finally {
+      setAsyncState("downloadingFromBandcamp", false);
+    }
+  }
+
   async function downloadSelectedTrackWithYtDl() {
     if (!selectedPlaylistDetails || !selectedTrackInfo) {
       return;
@@ -2453,6 +2610,11 @@ function App() {
       canUseSelectedTrackDirectSoundcloudDownload
     ) &&
     Boolean(selectedTrackInfo?.permalink_url);
+  const canDownloadSelectedTrackFromBandcamp =
+    hasAvailableLocalFolder &&
+    Boolean(selectedTrackInfo?.permalink_url) &&
+    Boolean(selectedTrackInfo?.associated_url) &&
+    getAssociatedSource(selectedTrackInfo?.associated_url) === "bandcamp";
   const hypedditDownloadButtonKey = isSelectedTrackHypedditSource
     ? "hypedditDownloadButton"
     : "soundcloudDownloadButton";
@@ -2631,6 +2793,7 @@ function App() {
                   selectedTrackInfo={selectedTrackInfo}
                   hasAvailableLocalFolder={hasAvailableLocalFolder}
                   canDownloadSelectedTrackFromHypeddit={canDownloadSelectedTrackFromHypeddit}
+                  canDownloadSelectedTrackFromBandcamp={canDownloadSelectedTrackFromBandcamp}
                   hypedditDownloadButtonKey={hypedditDownloadButtonKey}
                   hypedditDownloadModalTitleKey={hypedditDownloadModalTitleKey}
                   canRunYtDlDownload={canRunYtDlDownload}
@@ -2640,6 +2803,8 @@ function App() {
                   hypedditDownloadRenameWithSoundcloudTitle={hypedditDownloadRenameWithSoundcloudTitle}
                   ytdlDownloadEmbedCover={ytdlDownloadEmbedCover}
                   ytdlDownloadRenameWithSoundcloudTitle={ytdlDownloadRenameWithSoundcloudTitle}
+                  bandcampDownloadEmbedCover={bandcampDownloadEmbedCover}
+                  bandcampDownloadRenameWithSoundcloudTitle={bandcampDownloadRenameWithSoundcloudTitle}
                   onSaveHypedditDownloadEmbedCover={(enabled) => {
                     saveHypedditDownloadEmbedCover(enabled).catch((error) => {
                       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -2660,6 +2825,16 @@ function App() {
                       setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
                     });
                   }}
+                  onSaveBandcampDownloadEmbedCover={(enabled) => {
+                    saveBandcampDownloadEmbedCover(enabled).catch((error) => {
+                      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+                    });
+                  }}
+                  onSaveBandcampDownloadRenameWithSoundcloudTitle={(enabled) => {
+                    saveBandcampDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                      setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+                    });
+                  }}
                   hypedditDownloadPhase={hypedditDownloadPhase}
                   availableMoveTargetPlaylists={availableMoveTargetPlaylists}
                   targetPlaylistIdForMove={targetPlaylistIdForMove}
@@ -2671,6 +2846,7 @@ function App() {
                   exportingSpectrogram={asyncState.exportingSpectrogram}
                   dissociatingLocalFile={asyncState.dissociatingLocalFile}
                   downloadingFromHypeddit={asyncState.downloadingFromHypeddit}
+                  downloadingFromBandcamp={asyncState.downloadingFromBandcamp}
                   downloadingFromYtDl={asyncState.downloadingFromYtDl}
                   downloadingCover={asyncState.downloadingCover}
                   loadingSpectrogramPreview={asyncState.loadingSpectrogramPreview}
@@ -2728,10 +2904,16 @@ function App() {
                     });
                   }}
                   onPrepareHypedditDownloadModal={() => prepareHypedditDownloadModal()}
+                  onPrepareBandcampDownloadModal={() => prepareHypedditDownloadModal()}
                   onPrepareYtDlDownloadModal={() => prepareHypedditDownloadModal()}
                   onDownloadFromHypeddit={() => {
                     downloadSelectedTrackFromHypeddit().catch((error) => {
                       setStatus(`${t("hypedditDownloadError")}: ${String(error)}`);
+                    });
+                  }}
+                  onDownloadFromBandcamp={() => {
+                    downloadSelectedTrackFromBandcamp().catch((error) => {
+                      setStatus(`${t("bandcampDownloadError")}: ${String(error)}`);
                     });
                   }}
                   onRunYtDlDownload={() => {
@@ -2800,9 +2982,16 @@ function App() {
             soundcloudDownloadRenameWithSoundcloudTitle={soundcloudDownloadRenameWithSoundcloudTitle}
             ytdlDownloadEmbedCover={ytdlDownloadEmbedCover}
             ytdlDownloadRenameWithSoundcloudTitle={ytdlDownloadRenameWithSoundcloudTitle}
+            bandcampDownloadEmbedCover={bandcampDownloadEmbedCover}
+            bandcampDownloadRenameWithSoundcloudTitle={bandcampDownloadRenameWithSoundcloudTitle}
             hypedditDownloadConversionFormat={hypedditDownloadConversionFormat}
             soundcloudDownloadConversionFormat={soundcloudDownloadConversionFormat}
+            bandcampDownloadConversionFormat={bandcampDownloadConversionFormat}
             ytdlDownloadFileType={ytdlDownloadFileType}
+            bandcampDownloadPreferredFormat={bandcampDownloadPreferredFormat}
+            bandcampEmailTimeoutSeconds={bandcampEmailTimeoutSeconds}
+            setBandcampEmailTimeoutSeconds={setBandcampEmailTimeoutSeconds}
+            bandcampDownloadFallbackToStream={bandcampDownloadFallbackToStream}
             playlistDownloadPriorityOrder={playlistDownloadPriorityOrder}
             hypedditDownloadStartTimeoutSeconds={hypedditDownloadStartTimeoutSeconds}
             hypedditDownloadRetryCount={hypedditDownloadRetryCount}
@@ -2866,6 +3055,16 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            onSaveBandcampDownloadEmbedCover={(enabled) => {
+              saveBandcampDownloadEmbedCover(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveBandcampDownloadRenameWithSoundcloudTitle={(enabled) => {
+              saveBandcampDownloadRenameWithSoundcloudTitle(enabled).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveHypedditDownloadConversionFormat={(format) => {
               saveHypedditDownloadConversionFormat(format).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
@@ -2876,8 +3075,28 @@ function App() {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}
+            onSaveBandcampDownloadConversionFormat={(format) => {
+              saveBandcampDownloadConversionFormat(format).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
             onSaveYtDlDownloadFileType={(fileType) => {
               saveYtDlDownloadFileType(fileType).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveBandcampDownloadPreferredFormat={(format) => {
+              saveBandcampDownloadPreferredFormat(format).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveBandcampEmailTimeoutSeconds={() => {
+              saveBandcampEmailTimeoutSeconds(bandcampEmailTimeoutSeconds).catch((error) => {
+                setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
+              });
+            }}
+            onSaveBandcampDownloadFallbackToStream={(enabled) => {
+              saveBandcampDownloadFallbackToStream(enabled).catch((error) => {
                 setStatus(`${t("statusDownloadSettingsError")}: ${String(error)}`);
               });
             }}

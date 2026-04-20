@@ -780,6 +780,36 @@ pub fn set_ytdl_download_rename_with_soundcloud_title(db_path: &Path, enabled: b
     set_bool_setting(db_path, "ytdl_download_rename_with_soundcloud_title", enabled)
 }
 
+pub fn get_bandcamp_download_embed_cover(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &[
+            "bandcamp_download_embed_cover",
+            "download_embed_cover",
+        ],
+        false,
+    )
+}
+
+pub fn set_bandcamp_download_embed_cover(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "bandcamp_download_embed_cover", enabled)
+}
+
+pub fn get_bandcamp_download_rename_with_soundcloud_title(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &[
+            "bandcamp_download_rename_with_soundcloud_title",
+            "download_rename_with_soundcloud_title",
+        ],
+        false,
+    )
+}
+
+pub fn set_bandcamp_download_rename_with_soundcloud_title(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "bandcamp_download_rename_with_soundcloud_title", enabled)
+}
+
 // Backward-compatible shared getters/setters now map to Hypeddit-specific settings.
 #[allow(dead_code)]
 pub fn get_download_embed_cover(db_path: &Path) -> Result<bool, String> {
@@ -2327,6 +2357,185 @@ pub fn attach_local_file_infos(
 
         track.local_file = file;
     }
+
+    Ok(())
+}
+
+pub fn get_bandcamp_download_conversion_format(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'bandcamp_download_conversion_format'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key = 'hypeddit_download_conversion_format'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "original" => "original",
+                "mp3" | "mp3_320" => "mp3_320",
+                "mp3_256" => "mp3_256",
+                "mp3_192" => "mp3_192",
+                "aac_320" => "aac_320",
+                "aac_256" => "aac_256",
+                "wav" => "wav",
+                "flac" => "flac",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
+        .unwrap_or_else(|| "original".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_bandcamp_download_conversion_format(db_path: &Path, format: &str) -> Result<(), String> {
+    let incoming = format.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "original" => "original",
+        "mp3" | "mp3_320" => "mp3_320",
+        "mp3_256" => "mp3_256",
+        "mp3_192" => "mp3_192",
+        "aac_320" => "aac_320",
+        "aac_256" => "aac_256",
+        "wav" => "wav",
+        "flac" => "flac",
+        _ => return Err("Format de conversion Bandcamp invalide.".to_string()),
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('bandcamp_download_conversion_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_bandcamp_download_preferred_format(db_path: &Path) -> Result<String, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'bandcamp_download_preferred_format'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .map(|item| item.trim().to_ascii_lowercase())
+        .and_then(|item| {
+            let normalized = match item.as_str() {
+                "aac-hi" => "aac-hi",
+                "aiff-lossless" => "aiff-lossless",
+                "alac" => "alac",
+                "flac" => "flac",
+                "mp3-128" => "mp3-128",
+                "mp3-320" => "mp3-320",
+                "mp3-v0" => "mp3-v0",
+                "vorbis" => "vorbis",
+                "wav" => "wav",
+                _ => return None,
+            };
+            Some(normalized.to_string())
+        })
+        .unwrap_or_else(|| "mp3-320".to_string());
+
+    Ok(normalized)
+}
+
+pub fn set_bandcamp_download_preferred_format(db_path: &Path, format: &str) -> Result<(), String> {
+    let incoming = format.trim().to_ascii_lowercase();
+    let normalized = match incoming.as_str() {
+        "aac-hi" => "aac-hi",
+        "aiff-lossless" => "aiff-lossless",
+        "alac" => "alac",
+        "flac" => "flac",
+        "mp3-128" => "mp3-128",
+        "mp3-320" => "mp3-320",
+        "mp3-v0" => "mp3-v0",
+        "vorbis" => "vorbis",
+        "wav" => "wav",
+        _ => return Err("Format prefere Bandcamp invalide.".to_string()),
+    };
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('bandcamp_download_preferred_format', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+pub fn get_bandcamp_download_fallback_to_stream(db_path: &Path) -> Result<bool, String> {
+    get_bool_setting_by_keys(
+        db_path,
+        &["bandcamp_download_fallback_to_stream"],
+        true,
+    )
+}
+
+pub fn set_bandcamp_download_fallback_to_stream(db_path: &Path, enabled: bool) -> Result<(), String> {
+    set_bool_setting(db_path, "bandcamp_download_fallback_to_stream", enabled)
+}
+
+pub fn get_bandcamp_email_timeout_seconds(db_path: &Path) -> Result<i64, String> {
+    let connection = open_connection(db_path)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'bandcamp_email_timeout_seconds'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let normalized = value
+        .and_then(|item| item.trim().parse::<i64>().ok())
+        .map(|value| value.clamp(15, 180))
+        .unwrap_or(60);
+
+    Ok(normalized)
+}
+
+pub fn set_bandcamp_email_timeout_seconds(db_path: &Path, seconds: i64) -> Result<(), String> {
+    let normalized = seconds.clamp(15, 180);
+
+    let connection = open_connection(db_path)?;
+    connection
+        .execute(
+            "
+            INSERT INTO app_settings (key, value)
+            VALUES ('bandcamp_email_timeout_seconds', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ",
+            params![normalized.to_string()],
+        )
+        .map_err(|error| error.to_string())?;
 
     Ok(())
 }

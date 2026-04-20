@@ -55,6 +55,12 @@ struct MiscSettings {
     hypeddit_download_conversion_format: String,
     soundcloud_download_conversion_format: String,
     ytdl_download_file_type: String,
+    bandcamp_download_embed_cover: bool,
+    bandcamp_download_rename_with_soundcloud_title: bool,
+    bandcamp_download_conversion_format: String,
+    bandcamp_download_preferred_format: String,
+    bandcamp_email_timeout_seconds: i64,
+    bandcamp_download_fallback_to_stream: bool,
     playlist_download_priority_order: String,
     analysis_auto_apply_frequency_max: bool,
     hypeddit_download_headless: bool,
@@ -1670,6 +1676,178 @@ fn download_playlist_with_ytdl(
     })
 }
 
+#[tauri::command]
+fn download_bandcamp_track_to_local_folder(
+    state: State<AppState>,
+    playlist_id: i64,
+    track_permalink_url: String,
+    track_title: String,
+    bandcamp_url: String,
+    artwork_url: Option<String>,
+    overwrite_existing: bool,
+    existing_file_path: Option<String>,
+) -> Result<HypedditDownloadResult, String> {
+    let folder_path = db::get_playlist_folder_link(&state.db_path, playlist_id)?
+        .ok_or_else(|| "Aucun dossier local associé à cette playlist.".to_string())?;
+    let folder = PathBuf::from(folder_path.trim());
+
+    if !folder.exists() || !folder.is_dir() {
+        return Err("Le dossier local associé est introuvable.".to_string());
+    }
+
+    let bandcamp_url_trimmed = bandcamp_url.trim();
+    if !bandcamp_url_trimmed.to_ascii_lowercase().contains("bandcamp") {
+        return Err("Lien Bandcamp invalide pour ce téléchargement.".to_string());
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "Impossible de localiser la racine du projet".to_string())?
+        .to_path_buf();
+    let script_path = project_root.join("scripts").join("bandcamp-download.mjs");
+
+    if !script_path.exists() {
+        return Err(format!(
+            "Script Bandcamp introuvable: {}",
+            script_path.display()
+        ));
+    }
+
+    let preferred_format = db::get_bandcamp_download_preferred_format(&state.db_path)?;
+    let email_timeout_seconds = db::get_bandcamp_email_timeout_seconds(&state.db_path)?;
+    let fallback_to_stream = db::get_bandcamp_download_fallback_to_stream(&state.db_path)?;
+
+    let existing_file_path_trimmed = existing_file_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+
+    let folder_arg = folder.to_string_lossy().to_string();
+    let timeout_arg = email_timeout_seconds.to_string();
+
+    let mut child = Command::new("node")
+        .arg(script_path.as_os_str())
+        .arg(bandcamp_url_trimmed)
+        .arg(folder_arg.as_str())
+        .arg(if overwrite_existing { "true" } else { "false" })
+        .arg(existing_file_path_trimmed.as_str())
+        .arg(preferred_format.as_str())
+        .arg(timeout_arg.as_str())
+        .arg(if fallback_to_stream { "true" } else { "false" })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .current_dir(project_root.as_path())
+        .spawn()
+        .map_err(|error| format!("Impossible de lancer le download Bandcamp: {error}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Impossible de lire la sortie du download Bandcamp".to_string())?;
+    let reader = BufReader::new(stdout);
+
+    let mut result_payload: Option<String> = None;
+    let mut script_error: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("Lecture download Bandcamp impossible: {error}"))?;
+        if let Some(value) = line.strip_prefix("__LOG__:") {
+            println!("[bandcamp] {value}");
+        }
+        if let Some(value) = line.strip_prefix("__ERROR__:") {
+            script_error = Some(value.to_string());
+        }
+        if let Some(value) = line.strip_prefix("__RESULT__:") {
+            result_payload = Some(value.to_string());
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("Attente download Bandcamp impossible: {error}"))?;
+
+    if !status.success() {
+        if let Some(script_error) = script_error {
+            return Err(format!("Download Bandcamp en erreur: {script_error}"));
+        }
+        return Err("Download Bandcamp en erreur".to_string());
+    }
+
+    let json_payload = result_payload.ok_or_else(|| "Download Bandcamp sans résultat".to_string())?;
+    let mut result = serde_json::from_str::<HypedditScriptResult>(json_payload.as_str())
+        .map_err(|error| format!("Réponse download Bandcamp invalide: {error}"))?;
+
+    if db::get_bandcamp_download_rename_with_soundcloud_title(&state.db_path)? {
+        let downloaded_path = PathBuf::from(result.file_path.as_str());
+        let extension = downloaded_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_else(|| ".mp3".to_string());
+        let renamed_file_name = format!("{}{}", sanitize_file_stem(track_title.as_str()), extension);
+        let renamed_path = folder.join(renamed_file_name);
+
+        if renamed_path != downloaded_path {
+            if renamed_path.exists() {
+                if overwrite_existing {
+                    std::fs::remove_file(&renamed_path)
+                        .map_err(|error| format!("Impossible d'écraser le fichier renommé existant: {error}"))?;
+                } else {
+                    return Err(format!(
+                        "Un fichier existe déjà avec le nom SoundCloud cible: {}",
+                        renamed_path.display()
+                    ));
+                }
+            }
+
+            std::fs::rename(&downloaded_path, &renamed_path).or_else(|_| {
+                std::fs::copy(&downloaded_path, &renamed_path)?;
+                std::fs::remove_file(&downloaded_path)
+            })
+            .map_err(|error| format!("Impossible de renommer le fichier téléchargé: {error}"))?;
+
+            result.file_path = renamed_path.to_string_lossy().to_string();
+            result.file_name = renamed_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| result.file_name.clone());
+        }
+    }
+
+    let conversion_format = db::get_bandcamp_download_conversion_format(&state.db_path)?;
+    if let Some((converted_path, converted_name)) = local_files::convert_audio_file_with_ffmpeg(
+        result.file_path.as_str(),
+        conversion_format.as_str(),
+        overwrite_existing,
+    )? {
+        result.file_path = converted_path;
+        result.file_name = converted_name;
+    }
+
+    if db::get_bandcamp_download_embed_cover(&state.db_path)? {
+        if let Some(artwork_url) = artwork_url.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            local_files::embed_cover_into_mp3(result.file_path.as_str(), artwork_url)?;
+        }
+    }
+
+    db::upsert_playlist_track_file_link_manual(
+        &state.db_path,
+        playlist_id,
+        track_permalink_url.trim(),
+        result.file_path.as_str(),
+    )?;
+
+    Ok(HypedditDownloadResult {
+        file_path: result.file_path,
+        file_name: result.file_name,
+        overwrote_existing: result.overwrote_existing,
+    })
+}
+
 fn resolve_ytdlp_binary() -> Result<String, String> {
     ["yt-dlp", "yt-dl"]
         .iter()
@@ -2254,6 +2432,13 @@ fn get_misc_settings(state: State<AppState>) -> Result<MiscSettings, String> {
         hypeddit_download_conversion_format: db::get_hypeddit_download_conversion_format(&state.db_path)?,
         soundcloud_download_conversion_format: db::get_soundcloud_download_conversion_format(&state.db_path)?,
         ytdl_download_file_type: db::get_ytdl_download_file_type(&state.db_path)?,
+        bandcamp_download_embed_cover: db::get_bandcamp_download_embed_cover(&state.db_path)?,
+        bandcamp_download_rename_with_soundcloud_title:
+            db::get_bandcamp_download_rename_with_soundcloud_title(&state.db_path)?,
+        bandcamp_download_conversion_format: db::get_bandcamp_download_conversion_format(&state.db_path)?,
+        bandcamp_download_preferred_format: db::get_bandcamp_download_preferred_format(&state.db_path)?,
+        bandcamp_email_timeout_seconds: db::get_bandcamp_email_timeout_seconds(&state.db_path)?,
+        bandcamp_download_fallback_to_stream: db::get_bandcamp_download_fallback_to_stream(&state.db_path)?,
         playlist_download_priority_order: db::get_playlist_download_priority_order(&state.db_path)?,
         analysis_auto_apply_frequency_max: db::get_analysis_auto_apply_frequency_max(&state.db_path)?,
         hypeddit_download_headless: db::get_hypeddit_download_headless(&state.db_path)?,
@@ -2311,6 +2496,19 @@ fn set_ytdl_download_rename_with_soundcloud_title(
 }
 
 #[tauri::command]
+fn set_bandcamp_download_embed_cover(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_bandcamp_download_embed_cover(&state.db_path, enabled)
+}
+
+#[tauri::command]
+fn set_bandcamp_download_rename_with_soundcloud_title(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    db::set_bandcamp_download_rename_with_soundcloud_title(&state.db_path, enabled)
+}
+
+#[tauri::command]
 fn set_hypeddit_download_conversion_format(state: State<AppState>, format: String) -> Result<(), String> {
     db::set_hypeddit_download_conversion_format(&state.db_path, format.as_str())
 }
@@ -2321,8 +2519,28 @@ fn set_soundcloud_download_conversion_format(state: State<AppState>, format: Str
 }
 
 #[tauri::command]
+fn set_bandcamp_download_conversion_format(state: State<AppState>, format: String) -> Result<(), String> {
+    db::set_bandcamp_download_conversion_format(&state.db_path, format.as_str())
+}
+
+#[tauri::command]
 fn set_ytdl_download_file_type(state: State<AppState>, file_type: String) -> Result<(), String> {
     db::set_ytdl_download_file_type(&state.db_path, file_type.as_str())
+}
+
+#[tauri::command]
+fn set_bandcamp_download_preferred_format(state: State<AppState>, format: String) -> Result<(), String> {
+    db::set_bandcamp_download_preferred_format(&state.db_path, format.as_str())
+}
+
+#[tauri::command]
+fn set_bandcamp_email_timeout_seconds(state: State<AppState>, seconds: i64) -> Result<(), String> {
+    db::set_bandcamp_email_timeout_seconds(&state.db_path, seconds)
+}
+
+#[tauri::command]
+fn set_bandcamp_download_fallback_to_stream(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    db::set_bandcamp_download_fallback_to_stream(&state.db_path, enabled)
 }
 
 #[tauri::command]
@@ -2418,6 +2636,7 @@ pub fn run() {
             save_playlist_track_cutoff_analysis,
             analyze_playlist_local_audio_quality,
             download_hypeddit_track_to_local_folder,
+            download_bandcamp_track_to_local_folder,
             download_playlist_with_ytdl,
             reveal_local_file_in_explorer,
             check_local_file_exists,
@@ -2438,9 +2657,15 @@ pub fn run() {
             set_soundcloud_download_rename_with_soundcloud_title,
             set_ytdl_download_embed_cover,
             set_ytdl_download_rename_with_soundcloud_title,
+            set_bandcamp_download_embed_cover,
+            set_bandcamp_download_rename_with_soundcloud_title,
             set_hypeddit_download_conversion_format,
             set_soundcloud_download_conversion_format,
+            set_bandcamp_download_conversion_format,
             set_ytdl_download_file_type,
+            set_bandcamp_download_preferred_format,
+            set_bandcamp_email_timeout_seconds,
+            set_bandcamp_download_fallback_to_stream,
             set_playlist_download_priority_order,
             set_analysis_auto_apply_frequency_max,
             set_hypeddit_download_headless,

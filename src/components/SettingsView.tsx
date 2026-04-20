@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Language, TranslationKey } from "../i18n";
 import type {
+  BandcampDownloadFormat,
   CoverQuality,
   DebugSettings,
   HypedditConversionFormat,
@@ -27,9 +28,16 @@ type SettingsViewProps = {
   soundcloudDownloadRenameWithSoundcloudTitle: boolean;
   ytdlDownloadEmbedCover: boolean;
   ytdlDownloadRenameWithSoundcloudTitle: boolean;
+  bandcampDownloadEmbedCover: boolean;
+  bandcampDownloadRenameWithSoundcloudTitle: boolean;
   hypedditDownloadConversionFormat: HypedditConversionFormat;
   soundcloudDownloadConversionFormat: HypedditConversionFormat;
+  bandcampDownloadConversionFormat: HypedditConversionFormat;
   ytdlDownloadFileType: YtDlDownloadFileType;
+  bandcampDownloadPreferredFormat: BandcampDownloadFormat;
+  bandcampEmailTimeoutSeconds: number;
+  setBandcampEmailTimeoutSeconds: (value: number) => void;
+  bandcampDownloadFallbackToStream: boolean;
   playlistDownloadPriorityOrder: PlaylistDownloadPriorityOrder;
   hypedditDownloadStartTimeoutSeconds: number;
   hypedditDownloadRetryCount: number;
@@ -61,9 +69,15 @@ type SettingsViewProps = {
   onSaveSoundcloudDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveYtDlDownloadEmbedCover: (enabled: boolean) => void;
   onSaveYtDlDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
+  onSaveBandcampDownloadEmbedCover: (enabled: boolean) => void;
+  onSaveBandcampDownloadRenameWithSoundcloudTitle: (enabled: boolean) => void;
   onSaveHypedditDownloadConversionFormat: (format: HypedditConversionFormat) => void;
   onSaveSoundcloudDownloadConversionFormat: (format: HypedditConversionFormat) => void;
+  onSaveBandcampDownloadConversionFormat: (format: HypedditConversionFormat) => void;
   onSaveYtDlDownloadFileType: (fileType: YtDlDownloadFileType) => void;
+  onSaveBandcampDownloadPreferredFormat: (format: BandcampDownloadFormat) => void;
+  onSaveBandcampEmailTimeoutSeconds: () => void;
+  onSaveBandcampDownloadFallbackToStream: (enabled: boolean) => void;
   onSavePlaylistDownloadPriorityOrder: (order: PlaylistDownloadPriorityOrder) => void;
   setHypedditDownloadStartTimeoutSeconds: (value: number) => void;
   onSaveHypedditDownloadStartTimeoutSeconds: () => void;
@@ -141,9 +155,16 @@ export function SettingsView({
   soundcloudDownloadRenameWithSoundcloudTitle,
   ytdlDownloadEmbedCover,
   ytdlDownloadRenameWithSoundcloudTitle,
+  bandcampDownloadEmbedCover,
+  bandcampDownloadRenameWithSoundcloudTitle,
   hypedditDownloadConversionFormat,
   soundcloudDownloadConversionFormat,
+  bandcampDownloadConversionFormat,
   ytdlDownloadFileType,
+  bandcampDownloadPreferredFormat,
+  bandcampEmailTimeoutSeconds,
+  setBandcampEmailTimeoutSeconds,
+  bandcampDownloadFallbackToStream,
   playlistDownloadPriorityOrder,
   hypedditDownloadStartTimeoutSeconds,
   hypedditDownloadRetryCount,
@@ -175,9 +196,15 @@ export function SettingsView({
   onSaveSoundcloudDownloadRenameWithSoundcloudTitle,
   onSaveYtDlDownloadEmbedCover,
   onSaveYtDlDownloadRenameWithSoundcloudTitle,
+  onSaveBandcampDownloadEmbedCover,
+  onSaveBandcampDownloadRenameWithSoundcloudTitle,
   onSaveHypedditDownloadConversionFormat,
   onSaveSoundcloudDownloadConversionFormat,
+  onSaveBandcampDownloadConversionFormat,
   onSaveYtDlDownloadFileType,
+  onSaveBandcampDownloadPreferredFormat,
+  onSaveBandcampEmailTimeoutSeconds,
+  onSaveBandcampDownloadFallbackToStream,
   onSavePlaylistDownloadPriorityOrder,
   setHypedditDownloadStartTimeoutSeconds,
   onSaveHypedditDownloadStartTimeoutSeconds,
@@ -574,6 +601,98 @@ export function SettingsView({
               <option value="wav">{t("downloadConversionFormatWav")}</option>
               <option value="flac">{t("downloadConversionFormatFlac")}</option>
             </select>
+          </label>
+        </section>
+
+        <section className="settings-card">
+          <h3>{t("bandcampDownloadSettingsTitle")}</h3>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={bandcampDownloadRenameWithSoundcloudTitle}
+              onChange={(event) => onSaveBandcampDownloadRenameWithSoundcloudTitle(event.currentTarget.checked)}
+            />
+            <span>{t("downloadRenameSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={bandcampDownloadEmbedCover}
+              onChange={(event) => onSaveBandcampDownloadEmbedCover(event.currentTarget.checked)}
+            />
+            <span>{t("downloadEmbedCoverSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <input
+              type="checkbox"
+              checked={bandcampDownloadFallbackToStream}
+              onChange={(event) => onSaveBandcampDownloadFallbackToStream(event.currentTarget.checked)}
+            />
+            <span>{t("bandcampFallbackToStreamSetting")}</span>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("downloadConversionFormatLabel")}</span>
+            <select
+              value={bandcampDownloadConversionFormat}
+              onChange={(event) => onSaveBandcampDownloadConversionFormat(event.currentTarget.value as HypedditConversionFormat)}
+            >
+              <option value="original">{t("downloadConversionFormatOriginal")}</option>
+              <option value="mp3_320">{t("downloadConversionFormatMp3320")}</option>
+              <option value="mp3_256">{t("downloadConversionFormatMp3256")}</option>
+              <option value="mp3_192">{t("downloadConversionFormatMp3192")}</option>
+              <option value="aac_320">{t("downloadConversionFormatAac320")}</option>
+              <option value="aac_256">{t("downloadConversionFormatAac256")}</option>
+              <option value="wav">{t("downloadConversionFormatWav")}</option>
+              <option value="flac">{t("downloadConversionFormatFlac")}</option>
+            </select>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("bandcampPreferredFormatLabel")}</span>
+            <select
+              value={bandcampDownloadPreferredFormat}
+              onChange={(event) => onSaveBandcampDownloadPreferredFormat(event.currentTarget.value as BandcampDownloadFormat)}
+            >
+              <option value="aac-hi">AAC hi</option>
+              <option value="aiff-lossless">AIFF lossless</option>
+              <option value="alac">ALAC</option>
+              <option value="flac">FLAC</option>
+              <option value="mp3-320">MP3 320</option>
+              <option value="mp3-v0">MP3 V0</option>
+              <option value="vorbis">Vorbis</option>
+              <option value="wav">WAV</option>
+              <option value="mp3-128">MP3 128</option>
+            </select>
+          </label>
+
+          <label className="setting-toggle auth-actions">
+            <span>{t("bandcampEmailTimeoutSecondsLabel")}</span>
+            <input
+              type="number"
+              min={15}
+              max={180}
+              step={1}
+              value={bandcampEmailTimeoutSeconds}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.currentTarget.value, 10);
+                if (Number.isNaN(parsed)) {
+                  return;
+                }
+                setBandcampEmailTimeoutSeconds(parsed);
+              }}
+              onBlur={onSaveBandcampEmailTimeoutSeconds}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSaveBandcampEmailTimeoutSeconds();
+                  event.currentTarget.blur();
+                }
+              }}
+            />
           </label>
         </section>
 

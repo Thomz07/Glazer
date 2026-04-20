@@ -103,6 +103,16 @@ export type HypedditConversionFormat =
   | "flac";
 
 export type YtDlDownloadFileType = "bestaudio" | "mp3" | "m4a" | "wav" | "flac";
+export type BandcampDownloadFormat =
+  | "aac-hi"
+  | "aiff-lossless"
+  | "alac"
+  | "flac"
+  | "mp3-128"
+  | "mp3-320"
+  | "mp3-v0"
+  | "vorbis"
+  | "wav";
 export type PlaylistDownloadPriorityOrder =
   | "hypeddit_soundcloud_ytdl"
   | "hypeddit_ytdl_soundcloud"
@@ -122,6 +132,12 @@ export type MiscSettings = {
   hypeddit_download_conversion_format?: HypedditConversionFormat;
   soundcloud_download_conversion_format?: HypedditConversionFormat;
   ytdl_download_file_type?: YtDlDownloadFileType;
+  bandcamp_download_embed_cover?: boolean;
+  bandcamp_download_rename_with_soundcloud_title?: boolean;
+  bandcamp_download_conversion_format?: HypedditConversionFormat;
+  bandcamp_download_preferred_format?: BandcampDownloadFormat;
+  bandcamp_email_timeout_seconds?: number;
+  bandcamp_download_fallback_to_stream?: boolean;
   playlist_download_priority_order?: PlaylistDownloadPriorityOrder;
   analysis_auto_apply_frequency_max?: boolean;
   hypeddit_download_headless?: boolean;
