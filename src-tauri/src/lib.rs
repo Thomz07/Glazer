@@ -1309,6 +1309,8 @@ fn download_hypeddit_track_to_local_folder(
         let profile_dir_arg = browser_profile_dir.to_string_lossy().to_string();
         let timeout_arg = hypeddit_download_start_timeout_seconds.to_string();
         let click_delay_arg = hypeddit_click_delay_ms.to_string();
+        let browser_engine = config::get_browser_automation_engine();
+        let lightpanda_ws_endpoint = config::get_lightpanda_ws_endpoint();
 
         let mut last_error = String::new();
         let mut script_result: Option<HypedditScriptResult> = None;
@@ -1338,6 +1340,8 @@ fn download_hypeddit_track_to_local_folder(
                 .arg(timeout_arg.as_str())
                 .arg(click_delay_arg.as_str())
                 .arg(manual_soundcloud_cookies_arg.as_str())
+                .arg(browser_engine.as_str())
+                .arg(lightpanda_ws_endpoint.as_str())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .current_dir(project_root.as_path())
@@ -2232,11 +2236,16 @@ fn connect_playwright_profile_session(
     std::fs::create_dir_all(&browser_profile_dir)
         .map_err(|error| format!("Impossible de préparer le profil navigateur Playwright: {error}"))?;
 
+    let browser_engine = config::get_browser_automation_engine();
+    let lightpanda_ws_endpoint = config::get_lightpanda_ws_endpoint();
+
     let mut child = Command::new("node")
         .arg(script_path)
         .arg(provider.as_str())
         .arg(browser_profile_dir.to_string_lossy().to_string())
         .arg(if reset_session { "true" } else { "false" })
+        .arg(browser_engine.as_str())
+        .arg(lightpanda_ws_endpoint.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)
@@ -2318,10 +2327,15 @@ fn get_playwright_profile_session_status(
     std::fs::create_dir_all(&browser_profile_dir)
         .map_err(|error| format!("Impossible de préparer le profil navigateur Playwright: {error}"))?;
 
+    let browser_engine = config::get_browser_automation_engine();
+    let lightpanda_ws_endpoint = config::get_lightpanda_ws_endpoint();
+
     let mut child = Command::new("node")
         .arg(script_path)
         .arg(provider.as_str())
         .arg(browser_profile_dir.to_string_lossy().to_string())
+        .arg(browser_engine.as_str())
+        .arg(lightpanda_ws_endpoint.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)

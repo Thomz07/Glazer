@@ -26,3 +26,5 @@ src-tauri/.env
 
 .github/
 .vscode/
+0/
+tmp/

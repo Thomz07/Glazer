@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
+import {
+  buildEngineAttemptOrder,
+  connectLightpandaContext,
+  resolveBrowserEngine,
+  resolveLightpandaWsEndpoint,
+} from "./browser-engine.mjs";
 
 const hypedditUrl = process.argv[2];
 const outputFolder = process.argv[3];
@@ -16,6 +22,8 @@ const profileDirArg = process.argv[12] ?? "";
 const downloadStartTimeoutSecondsArg = process.argv[13] ?? "30";
 const clickDelayMsArg = process.argv[14] ?? "0";
 const manualSoundCloudCookiesPathArg = process.argv[15] ?? "";
+const browserEngineArg = process.argv[16] ?? "auto";
+const lightpandaWsEndpointArg = process.argv[17] ?? "";
 
 if (!hypedditUrl) {
   console.error("Missing Hypeddit URL");
@@ -46,9 +54,11 @@ const clickDelayMs = Number.isFinite(parsedClickDelayMs)
   ? Math.min(5000, Math.max(0, parsedClickDelayMs))
   : 0;
 const manualSoundCloudCookiesPath = manualSoundCloudCookiesPathArg.trim();
+const browserEnginePreference = resolveBrowserEngine(browserEngineArg);
+const lightpandaWsEndpoint = resolveLightpandaWsEndpoint(lightpandaWsEndpointArg);
 
 process.stdout.write(
-  `__LOG__:app_connections soundcloud=${useAppSoundCloudConnection} spotify=${useAppSpotifyConnection} headless=${headless} download_start_timeout_seconds=${downloadStartTimeoutSeconds} click_delay_ms=${clickDelayMs}\n`,
+  `__LOG__:app_connections soundcloud=${useAppSoundCloudConnection} spotify=${useAppSpotifyConnection} headless=${headless} download_start_timeout_seconds=${downloadStartTimeoutSeconds} click_delay_ms=${clickDelayMs} browser_engine_pref=${browserEnginePreference}\n`,
 );
 
 function normalizeSameSiteValue(value) {
@@ -184,7 +194,7 @@ function buildCommonLaunchOptions(isHeadless) {
   };
 }
 
-async function launchContextWithBrowserFallback(profileDirectory, isHeadless) {
+async function launchPlaywrightContextWithBrowserFallback(profileDirectory, isHeadless) {
   const base = buildCommonLaunchOptions(isHeadless);
 
   const candidates = [
@@ -207,6 +217,73 @@ async function launchContextWithBrowserFallback(profileDirectory, isHeadless) {
   }
 
   throw new Error(`Aucun navigateur compatible trouve. Details: ${errors.join(" | ")}`);
+}
+
+async function launchAutomationContext(profileDirectory, isHeadless) {
+  const compatibilityIssues = [];
+  if (!isHeadless) {
+    compatibilityIssues.push("Lightpanda est headless-only (active headless=true).");
+  }
+  if (useAppSoundCloudConnection || useAppSpotifyConnection) {
+    compatibilityIssues.push("Les sessions connectees des providers utilisent le profil Playwright persistant.");
+  }
+
+  const allowLightpanda = compatibilityIssues.length === 0;
+  if (browserEnginePreference === "lightpanda" && !allowLightpanda) {
+    throw new Error(`Lightpanda incompatible avec cette execution: ${compatibilityIssues.join(" ")}`);
+  }
+
+  const attemptOrder = buildEngineAttemptOrder(browserEnginePreference, {
+    allowPlaywright: true,
+    allowLightpanda,
+  });
+
+  const errors = [];
+
+  for (const engine of attemptOrder) {
+    if (engine === "lightpanda") {
+      try {
+        const { context } = await connectLightpandaContext(lightpandaWsEndpoint);
+        process.stdout.write(`__LOG__:Browser engine selected: lightpanda (${lightpandaWsEndpoint})\n`);
+
+        return {
+          engine,
+          context,
+          close: async () => {
+            for (const candidatePage of context.pages()) {
+              try {
+                if (!candidatePage.isClosed()) {
+                  await candidatePage.close({ runBeforeUnload: false });
+                }
+              } catch {
+                // Ignore page close errors.
+              }
+            }
+          },
+        };
+      } catch (error) {
+        errors.push(`${engine}: ${error?.message ?? String(error)}`);
+        continue;
+      }
+    }
+
+    try {
+      const context = await launchPlaywrightContextWithBrowserFallback(profileDirectory, isHeadless);
+      process.stdout.write("__LOG__:Browser engine selected: playwright\n");
+
+      return {
+        engine,
+        context,
+        close: async () => {
+          await context.close().catch(() => {});
+        },
+      };
+    } catch (error) {
+      errors.push(`${engine}: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  throw new Error(`Aucun moteur navigateur compatible trouve. Details: ${errors.join(" | ")}`);
 }
 
 async function hasAuthenticatedSoundCloudSession(context) {
@@ -312,11 +389,245 @@ function sanitizeFileName(name) {
     .trim();
 }
 
+function extractFileNameFromContentDisposition(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  const encodedMatch = rawValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].replace(/^"|"$/g, "")).trim();
+    } catch {
+      // Ignore malformed encoded filenames.
+    }
+  }
+
+  const plainMatch = rawValue.match(/filename=([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].replace(/^"|"$/g, "").trim();
+  }
+
+  return null;
+}
+
+function extensionFromContentType(contentType) {
+  const normalized = String(contentType || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (normalized === "audio/mpeg" || normalized === "audio/mp3") {
+    return ".mp3";
+  }
+  if (normalized === "audio/wav" || normalized === "audio/x-wav" || normalized === "audio/wave") {
+    return ".wav";
+  }
+  if (normalized === "audio/flac" || normalized === "audio/x-flac") {
+    return ".flac";
+  }
+  if (normalized === "audio/aac") {
+    return ".aac";
+  }
+  if (normalized === "audio/mp4" || normalized === "audio/x-m4a") {
+    return ".m4a";
+  }
+  if (normalized === "audio/ogg") {
+    return ".ogg";
+  }
+
+  return "";
+}
+
+function fileNameFromUrl(downloadUrl) {
+  try {
+    const parsed = new URL(downloadUrl);
+    const candidate = decodeURIComponent(parsed.pathname.split("/").pop() || "").trim();
+    return candidate || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAbsoluteUrl(candidate, baseUrl) {
+  const trimmed = String(candidate || "").trim();
+  if (!trimmed || trimmed.startsWith("#") || trimmed.toLowerCase().startsWith("javascript:")) {
+    return null;
+  }
+
+  try {
+    return new URL(trimmed, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveDirectDownloadUrlFromPage(page) {
+  const candidate = await page.evaluate(() => {
+    const values = [];
+
+    const pushValue = (value) => {
+      if (!value) {
+        return;
+      }
+      const normalized = String(value).trim();
+      if (!normalized) {
+        return;
+      }
+      values.push(normalized);
+    };
+
+    const downloadButton = document.querySelector("#gateDownloadButton");
+    if (downloadButton) {
+      pushValue(downloadButton.getAttribute("href"));
+      pushValue(downloadButton.getAttribute("data-href"));
+      pushValue(downloadButton.getAttribute("data-url"));
+    }
+
+    for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      const href = anchor.getAttribute("href");
+      const idValue = String(anchor.getAttribute("id") || "").toLowerCase();
+      const textValue = String(anchor.textContent || "").toLowerCase();
+      const hrefValue = String(href || "").toLowerCase();
+
+      if (idValue.includes("download") || textValue.includes("download") || hrefValue.includes("download")) {
+        pushValue(href);
+      }
+    }
+
+    return values[0] || null;
+  });
+
+  return resolveAbsoluteUrl(candidate, page.url());
+}
+
+async function saveDirectDownloadFromUrl(context, downloadUrl) {
+  const response = await context.request.get(downloadUrl, {
+    timeout: 120000,
+    failOnStatusCode: false,
+    maxRedirects: 10,
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Download direct en erreur (${response.status()}) via URL fallback.`);
+  }
+
+  const headers = response.headers();
+  const contentDisposition = headers["content-disposition"];
+  const contentType = headers["content-type"];
+  const dispositionName = extractFileNameFromContentDisposition(contentDisposition);
+  const urlName = fileNameFromUrl(response.url()) || fileNameFromUrl(downloadUrl);
+  const extensionFromType = extensionFromContentType(contentType);
+
+  let suggested = sanitizeFileName(dispositionName || urlName || "track");
+  if (!path.extname(suggested) && extensionFromType) {
+    suggested = `${suggested}${extensionFromType}`;
+  }
+
+  let targetPath = preferredFilePath || path.join(outputFolder, suggested);
+  let removedPreviousPreferredFile = false;
+
+  if (preferredFilePath && overwriteExisting) {
+    const preferredDirectory = path.dirname(preferredFilePath);
+    const preferredStem = path.basename(preferredFilePath, path.extname(preferredFilePath));
+    const downloadedExtension = path.extname(suggested) || extensionFromType;
+
+    if (downloadedExtension) {
+      const extensionAwareTargetPath = path.join(preferredDirectory, `${preferredStem}${downloadedExtension}`);
+
+      if (extensionAwareTargetPath !== preferredFilePath && fs.existsSync(preferredFilePath)) {
+        fs.rmSync(preferredFilePath, { force: true });
+        removedPreviousPreferredFile = true;
+      }
+
+      targetPath = extensionAwareTargetPath;
+    }
+  }
+
+  const existedBeforeSave = fs.existsSync(targetPath);
+  if (!overwriteExisting && existedBeforeSave) {
+    throw new Error(`File already exists at ${targetPath}`);
+  }
+
+  if (overwriteExisting && existedBeforeSave) {
+    fs.rmSync(targetPath, { force: true });
+  }
+
+  const bodyBuffer = Buffer.from(await response.body());
+
+  process.stdout.write("__PROGRESS__:browser_cut\n");
+  process.stdout.write("__PROGRESS__:file_saving\n");
+
+  fs.writeFileSync(targetPath, bodyBuffer);
+
+  return {
+    file_path: targetPath,
+    file_name: path.basename(targetPath),
+    overwrote_existing: overwriteExisting && (existedBeforeSave || removedPreviousPreferredFile),
+  };
+}
+
 async function applyGateDelay(page, baseDelayMs = 0) {
   const finalDelay = Math.max(baseDelayMs, clickDelayMs);
   if (finalDelay > 0) {
     await page.waitForTimeout(finalDelay);
   }
+}
+
+async function clickLocatorReliably(locator, label) {
+  const firstCandidate = locator.first();
+  await firstCandidate.waitFor({ state: "attached", timeout: 15000 });
+
+  let candidate = firstCandidate;
+  const totalCandidates = await locator.count().catch(() => 1);
+  const maxCandidatesToProbe = Math.max(1, Math.min(totalCandidates, 6));
+  for (let index = 0; index < maxCandidatesToProbe; index += 1) {
+    const probe = locator.nth(index);
+    const visible = await probe.isVisible().catch(() => false);
+    if (visible) {
+      candidate = probe;
+      break;
+    }
+  }
+
+  await candidate.scrollIntoViewIfNeeded().catch(() => {});
+
+  try {
+    await candidate.click({ timeout: 6000 });
+    process.stdout.write(`__LOG__:click_ok=${label}:normal\n`);
+    return;
+  } catch (normalError) {
+    process.stdout.write(`__LOG__:click_retry=${label}:force reason=${normalError?.message ?? String(normalError)}\n`);
+  }
+
+  try {
+    await candidate.click({ timeout: 6000, force: true });
+    process.stdout.write(`__LOG__:click_ok=${label}:force\n`);
+    return;
+  } catch (forceError) {
+    process.stdout.write(`__LOG__:click_retry=${label}:dom reason=${forceError?.message ?? String(forceError)}\n`);
+  }
+
+  const elementHandle = await candidate.elementHandle();
+  if (!elementHandle) {
+    throw new Error(`Impossible de cliquer ${label}: element introuvable.`);
+  }
+
+  await elementHandle.evaluate((element) => {
+    if (typeof element.click === "function") {
+      element.click();
+      return;
+    }
+
+    const mouseDownEvent = new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window });
+    const mouseUpEvent = new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window });
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true, view: window });
+    element.dispatchEvent(mouseDownEvent);
+    element.dispatchEvent(mouseUpEvent);
+    element.dispatchEvent(clickEvent);
+  });
+
+  process.stdout.write(`__LOG__:click_ok=${label}:dom\n`);
 }
 
 async function handleEmailGate(page) {
@@ -372,12 +683,45 @@ async function handleSoundCloudGate(page, context) {
   }
 }
 
-async function closeSocialPopupAndStabilize(page, context, popupHostFragment) {
-  const popup = await waitForPopupByUrl(context, popupHostFragment, 5000);
+async function closeSocialPopupAndStabilize(page, context, popupHostFragment, clickAction) {
+  const pagesBeforeClick = new Set(context.pages().filter((candidatePage) => !candidatePage.isClosed()));
+  const popupPromise = context.waitForEvent("page", { timeout: 7000 }).catch(() => null);
+
+  await clickAction();
+
+  let popup = await popupPromise;
+
   if (!popup) {
-    throw new Error(`Popup ${popupHostFragment} not found after clicking button`);
+    popup = context
+      .pages()
+      .filter((candidatePage) => !candidatePage.isClosed() && candidatePage !== page)
+      .find((candidatePage) => !pagesBeforeClick.has(candidatePage)) || null;
   }
-  await popup.close({ runBeforeUnload: false });
+
+  if (!popup) {
+    popup = await waitForPopupByUrl(context, popupHostFragment, 7000);
+  }
+
+  if (!popup) {
+    const remainingPages = context
+      .pages()
+      .filter((candidatePage) => !candidatePage.isClosed() && candidatePage !== page);
+    popup = remainingPages[remainingPages.length - 1] ?? null;
+  }
+
+  if (!popup) {
+    process.stdout.write(`__LOG__:Popup ${popupHostFragment} not detected, continuing gate flow.\n`);
+    await page.waitForTimeout(1000);
+    await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+    return;
+  }
+
+  await popup.waitForLoadState("domcontentloaded", { timeout: 7000 }).catch(() => {});
+  if (!popup.isClosed()) {
+    await popup.close({ runBeforeUnload: false }).catch(() => {});
+  }
+
+  await page.bringToFront().catch(() => {});
   await page.waitForTimeout(1000);
   await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
 }
@@ -389,26 +733,39 @@ async function handleInstagramGate(page, context) {
     return;
   }
 
-  await page.locator("#instagram_status .hype-btn-instagram").first().waitFor({
+  const nextButton = page.locator("#skipper_ig_next");
+  const instagramButton = page.locator(
+    "#instagram_status .hype-btn-instagram.undone, #instagram_status .hype-btn-instagram, #instagram_status a[href*='instagram.com']",
+  );
+
+  await instagramButton.waitFor({
     state: "attached",
     timeout: 30000,
   });
 
-  while (true) {
-    const undoneButton = page.locator("#instagram_status .hype-btn-instagram.undone").first();
-    if (!(await undoneButton.count())) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const nextVisible = await nextButton.isVisible().catch(() => false);
+    if (nextVisible) {
+      break;
+    }
+
+    const hasInstagramButton = await instagramButton.count();
+    if (!hasInstagramButton) {
+      process.stdout.write("__LOG__:instagram_button_missing_before_next\n");
       break;
     }
 
     await applyGateDelay(page);
-    await undoneButton.click();
-    await closeSocialPopupAndStabilize(page, context, "instagram.com");
+    await closeSocialPopupAndStabilize(page, context, "instagram.com", async () => {
+      await clickLocatorReliably(instagramButton, `instagram_open_${attempt + 1}`);
+    });
+
+    await page.waitForTimeout(1200);
   }
 
-  const nextButton = page.locator("#skipper_ig_next").first();
-  await nextButton.waitFor({ state: "visible", timeout: 30000 });
+  await nextButton.first().waitFor({ state: "visible", timeout: 30000 });
   await applyGateDelay(page);
-  await nextButton.click();
+  await clickLocatorReliably(nextButton, "instagram_next");
 }
 
 async function handleTikTokGate(page, context) {
@@ -418,26 +775,39 @@ async function handleTikTokGate(page, context) {
     return;
   }
 
-  await page.locator("#tiktok_status .hype-btn-tiktok").first().waitFor({
+  const nextButton = page.locator("#skipper_tk_next");
+  const tiktokButton = page.locator(
+    "#tiktok_status .hype-btn-tiktok.undone, #tiktok_status .hype-btn-tiktok, #tiktok_status a[href*='tiktok.com']",
+  );
+
+  await tiktokButton.waitFor({
     state: "attached",
     timeout: 30000,
   });
 
-  while (true) {
-    const undoneButton = page.locator("#tiktok_status .hype-btn-tiktok.undone").first();
-    if (!(await undoneButton.count())) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const nextVisible = await nextButton.isVisible().catch(() => false);
+    if (nextVisible) {
+      break;
+    }
+
+    const hasTikTokButton = await tiktokButton.count();
+    if (!hasTikTokButton) {
+      process.stdout.write("__LOG__:tiktok_button_missing_before_next\n");
       break;
     }
 
     await applyGateDelay(page);
-    await undoneButton.click();
-    await closeSocialPopupAndStabilize(page, context, "tiktok.com");
+    await closeSocialPopupAndStabilize(page, context, "tiktok.com", async () => {
+      await clickLocatorReliably(tiktokButton, `tiktok_open_${attempt + 1}`);
+    });
+
+    await page.waitForTimeout(1200);
   }
 
-  const nextButton = page.locator("#skipper_tk_next").first();
-  await nextButton.waitFor({ state: "visible", timeout: 30000 });
+  await nextButton.first().waitFor({ state: "visible", timeout: 30000 });
   await applyGateDelay(page);
-  await nextButton.click();
+  await clickLocatorReliably(nextButton, "tiktok_next");
 }
 
 async function handleFacebookGate(page) {
@@ -581,7 +951,9 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
   fs.mkdirSync(outputFolder, { recursive: true });
 
   const preloadPlaywrightSessions = useAppSoundCloudConnection || useAppSpotifyConnection;
-  const context = await launchContextWithBrowserFallback(profileDir, headless);
+  const automation = await launchAutomationContext(profileDir, headless);
+  const context = automation.context;
+  const activeBrowserEngine = automation.engine;
 
   const manualCookiesApplied = await applyManualSoundCloudCookies(context, manualSoundCloudCookiesPath);
   if (manualCookiesApplied) {
@@ -606,7 +978,7 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
     }
 
     if (missingProviders.length > 0) {
-      await context.close();
+      await automation.close();
       process.stdout.write(
         `__ERROR__:Session Playwright manquante pour ${missingProviders.join(", ")}. Connecte-toi depuis Reglages puis relance.\n`,
       );
@@ -614,6 +986,8 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
     }
 
     process.stdout.write("__LOG__:Using Playwright profile with preloaded sessions check enabled.\n");
+  } else if (activeBrowserEngine === "lightpanda") {
+    process.stdout.write("__LOG__:Using Lightpanda CDP runtime (no Playwright persistent profile preload).\n");
   } else {
     process.stdout.write("__LOG__:Using Playwright profile only (preload sessions check disabled).\n");
   }
@@ -638,17 +1012,36 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
   const workflowTask = runOldWorkflow(page, context, () => downloadStarted);
 
   let download;
+  let directDownloadUrl = null;
   try {
     download = await downloadPromise;
     process.stdout.write("__PROGRESS__:download_started\n");
   } catch {
     await workflowTask.catch(() => {});
-    await context.close();
-    process.stdout.write("__ERROR__:Aucun telechargement detecte (timeout).\n");
-    process.exit(3);
+
+    if (activeBrowserEngine === "lightpanda") {
+      directDownloadUrl = await resolveDirectDownloadUrlFromPage(page).catch(() => null);
+      if (directDownloadUrl) {
+        process.stdout.write(`__LOG__:Download event unavailable, using direct URL fallback: ${directDownloadUrl}\n`);
+        process.stdout.write("__PROGRESS__:download_started\n");
+      }
+    }
+
+    if (!directDownloadUrl) {
+      await automation.close();
+      process.stdout.write("__ERROR__:Aucun telechargement detecte (timeout).\n");
+      process.exit(3);
+    }
   }
 
   await workflowTask.catch(() => {});
+
+  if (!download && directDownloadUrl) {
+    const fallbackResult = await saveDirectDownloadFromUrl(context, directDownloadUrl);
+    process.stdout.write(`__RESULT__:${JSON.stringify(fallbackResult)}\n`);
+    await automation.close();
+    return;
+  }
 
   const suggested = sanitizeFileName(download.suggestedFilename() || "track.mp3");
   let targetPath = preferredFilePath || path.join(outputFolder, suggested);
@@ -673,20 +1066,20 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
 
   const existedBeforeSave = fs.existsSync(targetPath);
   if (!overwriteExisting && existedBeforeSave) {
-    await context.close();
+    await automation.close();
     process.stdout.write(`__ERROR__:File already exists at ${targetPath}\n`);
     process.exit(2);
   }
 
   if (!downloadStarted) {
-    await context.close();
+    await automation.close();
     process.stdout.write("__ERROR__:Le telechargement n'est pas demarre, fermeture navigateur annulee.\n");
     process.exit(3);
   }
 
   const downloadFailure = await download.failure();
   if (downloadFailure) {
-    await context.close();
+    await automation.close();
     process.stdout.write(`__ERROR__:Download Playwright en erreur: ${downloadFailure}\n`);
     process.exit(4);
   }
@@ -712,7 +1105,7 @@ async function runOldWorkflow(page, context, hasDownloadStarted) {
     overwrote_existing: overwriteExisting && (existedBeforeSave || removedPreviousPreferredFile),
   })}\n`);
 
-  await context.close();
+  await automation.close();
 })().catch(async (error) => {
   process.stdout.write(`__ERROR__:${error?.message ?? String(error)}\n`);
   process.exit(1);

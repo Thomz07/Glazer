@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import { chromium } from "playwright";
+import {
+  resolveBrowserEngine,
+  resolveLightpandaWsEndpoint,
+} from "./browser-engine.mjs";
 
 const providerArg = process.argv[2] ?? "";
 const profileDirArg = process.argv[3] ?? "";
+const browserEngineArg = process.argv[4] ?? "auto";
+const lightpandaWsEndpointArg = process.argv[5] ?? "";
 
 const provider = providerArg.trim().toLowerCase();
 const profileDir = profileDirArg.trim();
+const browserEnginePreference = resolveBrowserEngine(browserEngineArg);
+const lightpandaWsEndpoint = resolveLightpandaWsEndpoint(lightpandaWsEndpointArg);
 
 if (!provider || (provider !== "soundcloud" && provider !== "spotify")) {
   console.error("Missing or invalid provider. Use soundcloud or spotify.");
@@ -208,6 +216,12 @@ async function isProviderConnected(currentProvider, context, page, options = {})
 
 (async () => {
   fs.mkdirSync(profileDir, { recursive: true });
+
+  if (browserEnginePreference === "lightpanda") {
+    process.stdout.write(
+      `__LOG__:Lightpanda requested (${lightpandaWsEndpoint}), but session status relies on the Playwright persistent profile. Falling back to Playwright.\n`,
+    );
+  }
 
   const context = await launchContext(profileDir);
   const page = context.pages()[0] ?? await context.newPage();

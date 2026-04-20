@@ -1,8 +1,18 @@
 import { chromium } from "playwright";
+import {
+  buildEngineAttemptOrder,
+  connectLightpandaContext,
+  resolveBrowserEngine,
+  resolveLightpandaWsEndpoint,
+} from "./browser-engine.mjs";
 
 const playlistUrl = process.argv[2];
 const headlessArg = process.argv[3] ?? "true";
+const browserEngineArg = process.argv[4] ?? "auto";
+const lightpandaWsEndpointArg = process.argv[5] ?? "";
 const headless = headlessArg === "true";
+const browserEnginePreference = resolveBrowserEngine(browserEngineArg);
+const lightpandaWsEndpoint = resolveLightpandaWsEndpoint(lightpandaWsEndpointArg);
 
 if (!playlistUrl) {
   console.error("Missing playlist URL");
@@ -28,9 +38,79 @@ function normalizeUrl(href) {
   }
 }
 
+async function launchAutomationRuntime() {
+  const compatibilityIssues = [];
+  if (!headless) {
+    compatibilityIssues.push("Lightpanda est headless-only (active headless=true pour l'utiliser).");
+  }
+
+  const allowLightpanda = compatibilityIssues.length === 0;
+  if (browserEnginePreference === "lightpanda" && !allowLightpanda) {
+    throw new Error(`Lightpanda incompatible avec cette execution: ${compatibilityIssues.join(" ")}`);
+  }
+
+  const attemptOrder = buildEngineAttemptOrder(browserEnginePreference, {
+    allowPlaywright: true,
+    allowLightpanda,
+  });
+
+  const errors = [];
+
+  for (const engine of attemptOrder) {
+    if (engine === "lightpanda") {
+      try {
+        const { context } = await connectLightpandaContext(lightpandaWsEndpoint);
+        process.stdout.write(`__LOG__:Browser engine selected: lightpanda (${lightpandaWsEndpoint})\n`);
+
+        return {
+          engine,
+          context,
+          close: async () => {
+            for (const candidatePage of context.pages()) {
+              try {
+                if (!candidatePage.isClosed()) {
+                  await candidatePage.close({ runBeforeUnload: false });
+                }
+              } catch {
+                // Ignore close errors.
+              }
+            }
+          },
+        };
+      } catch (error) {
+        errors.push(`${engine}: ${error?.message ?? String(error)}`);
+        continue;
+      }
+    }
+
+    try {
+      const browser = await chromium.launch({ headless });
+      const context = await browser.newContext();
+      process.stdout.write("__LOG__:Browser engine selected: playwright\n");
+
+      return {
+        engine,
+        context,
+        close: async () => {
+          try {
+            await context.close();
+          } catch {
+            // Ignore context close errors.
+          }
+          await browser.close().catch(() => {});
+        },
+      };
+    } catch (error) {
+      errors.push(`${engine}: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  throw new Error(`No compatible browser runtime found. Details: ${errors.join(" | ")}`);
+}
+
 (async () => {
-  const browser = await chromium.launch({ headless });
-  const context = await browser.newContext();
+  const runtime = await launchAutomationRuntime();
+  const { context } = runtime;
   const page = await context.newPage();
 
   await page.goto(playlistUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -109,8 +189,7 @@ function normalizeUrl(href) {
 
   process.stdout.write(`__RESULT__:${JSON.stringify(normalized)}\n`);
 
-  await context.close();
-  await browser.close();
+  await runtime.close();
 })().catch((error) => {
   console.error(error?.message ?? String(error));
   process.exit(1);

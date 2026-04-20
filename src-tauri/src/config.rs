@@ -11,6 +11,7 @@ pub struct SpotifySecrets {
 
 pub const SOUNDCLOUD_REDIRECT_URI: &str = "http://127.0.0.1:4567/callback";
 pub const SPOTIFY_REDIRECT_URI: &str = "http://127.0.0.1:4568/callback";
+pub const DEFAULT_LIGHTPANDA_WS_ENDPOINT: &str = "ws://127.0.0.1:9222";
 
 pub fn load_dotenv() {
     let _ = dotenvy::from_filename(".env");
@@ -65,4 +66,24 @@ fn load_secret_value(key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
+}
+
+pub fn get_browser_automation_engine() -> String {
+    let raw_value = std::env::var("GLAZER_BROWSER_ENGINE").unwrap_or_default();
+    let normalized = raw_value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "playwright" => "playwright".to_string(),
+        "lightpanda" => "lightpanda".to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+pub fn get_lightpanda_ws_endpoint() -> String {
+    let raw_value = std::env::var("GLAZER_LIGHTPANDA_WS_ENDPOINT").unwrap_or_default();
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        DEFAULT_LIGHTPANDA_WS_ENDPOINT.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }

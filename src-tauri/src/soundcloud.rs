@@ -11,7 +11,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::form_urlencoded;
 
-use crate::config::{SoundCloudSecrets, SOUNDCLOUD_REDIRECT_URI};
+use crate::config::{
+    get_browser_automation_engine,
+    get_lightpanda_ws_endpoint,
+    SoundCloudSecrets,
+    SOUNDCLOUD_REDIRECT_URI,
+};
 use crate::models::{Playlist, PlaylistDetails, PlaylistTrack};
 
 const AUTH_BASE_URL: &str = "https://soundcloud.com/connect";
@@ -747,10 +752,15 @@ fn scrape_missing_tracks_with_browser_automation(
         ));
     }
 
+    let browser_engine = get_browser_automation_engine();
+    let lightpanda_ws_endpoint = get_lightpanda_ws_endpoint();
+
     let mut child = Command::new("node")
         .arg(script_path)
         .arg(playlist_url)
         .arg(if headless { "true" } else { "false" })
+        .arg(browser_engine.as_str())
+        .arg(lightpanda_ws_endpoint.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(project_root)

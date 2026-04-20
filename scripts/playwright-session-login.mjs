@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import { chromium } from "playwright";
+import {
+  resolveBrowserEngine,
+  resolveLightpandaWsEndpoint,
+} from "./browser-engine.mjs";
 
 const providerArg = process.argv[2] ?? "";
 const profileDirArg = process.argv[3] ?? "";
 const resetSessionArg = process.argv[4] ?? "false";
+const browserEngineArg = process.argv[5] ?? "auto";
+const lightpandaWsEndpointArg = process.argv[6] ?? "";
 
 const provider = providerArg.trim().toLowerCase();
 const profileDir = profileDirArg.trim();
 const resetSession = resetSessionArg.trim().toLowerCase() === "true";
+const browserEnginePreference = resolveBrowserEngine(browserEngineArg);
+const lightpandaWsEndpoint = resolveLightpandaWsEndpoint(lightpandaWsEndpointArg);
 
 if (!provider || (provider !== "soundcloud" && provider !== "spotify")) {
   console.error("Missing or invalid provider. Use soundcloud or spotify.");
@@ -292,6 +300,12 @@ async function clearSoundCloudSession(context, page) {
 
 (async () => {
   fs.mkdirSync(profileDir, { recursive: true });
+
+  if (browserEnginePreference === "lightpanda") {
+    process.stdout.write(
+      `__LOG__:Lightpanda requested (${lightpandaWsEndpoint}), but interactive provider login requires Playwright headed mode. Falling back to Playwright.\n`,
+    );
+  }
 
   const context = await launchContext(profileDir);
   process.stdout.write("__PROGRESS__:browser_ready\n");

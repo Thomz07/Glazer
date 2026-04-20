@@ -41,6 +41,34 @@ npm install
 npx playwright install chromium
 ```
 
+### 2bis. Option navigateur lightpanda (beta)
+
+Glazer peut utiliser Lightpanda pour une partie des automatisations navigateur.
+
+- Mode de selection: `GLAZER_BROWSER_ENGINE=auto|playwright|lightpanda`
+- Endpoint CDP Lightpanda: `GLAZER_LIGHTPANDA_WS_ENDPOINT=ws://127.0.0.1:9222`
+
+Exemple (PowerShell):
+
+```powershell
+$env:GLAZER_BROWSER_ENGINE = "auto"
+$env:GLAZER_LIGHTPANDA_WS_ENDPOINT = "ws://127.0.0.1:9222"
+npm run tauri dev
+```
+
+Compatibilite actuelle:
+
+- `soundcloud-fallback.mjs`: compatible Lightpanda en mode headless.
+- `hypeddit-download.mjs`: compatible Lightpanda en mode headless, avec fallback URL direct si l'evenement de download CDP n'est pas expose.
+- `playwright-session-login.mjs`: Playwright requis (login interactif + profil persistant).
+- `playwright-session-status.mjs`: Playwright requis (lecture du profil persistant de session).
+
+Notes Windows:
+
+- Lightpanda n'a pas de binaire Windows natif.
+- Sur Windows, utiliser Lightpanda via WSL2 ou Docker (CDP sur `127.0.0.1:9222`).
+- En mode `auto`, Glazer bascule sur Playwright quand Lightpanda n'est pas compatible avec le flux demande.
+
 ### 3. Configurer OAuth en local
 
 Copie le template d'environnement:
